@@ -12,6 +12,9 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
 const fmt = ts => new Date(ts).toLocaleString();
 const roleName = id => (ROLES.find(r => r.id === id) || {}).name || id;
 const cellName = id => (DOMAIN_CELLS.find(c => c.id === id) || {}).name || id;
+const memberName = x => `${x.name || ""} ${x.surname || ""}`.trim() || (x.email || "Member");
+// Church-level roles see the full member database and every cell/group.
+const seeAllMembers = () => auth.canConfigure(); // admin + pastoral core + senior pastors
 
 let view = "home";
 
@@ -169,15 +172,20 @@ async function cellsView() {
   const u = auth.current;
   const users = await db.list("users");
   const leaders = await db.list("cellLeaders");
+  const seeAll = seeAllMembers();
   return `
     <div class="card">
       <h2>Domain Cells</h2>
-      <p class="sub">The <b>Church</b> is the primary domain with the master database. Join any cell below.</p>
+      <p class="sub">The <b>Church</b> is the primary domain with the master member database. Join any cell below. Leaders are drawn from the member database, and see only the members of their cell.</p>
     </div>
     ${DOMAIN_CELLS.map(c => {
       const members = users.filter(x => x.domainCell === c.id);
       const cLeaders = leaders.filter(l => l.cellId === c.id);
       const mine = u.domainCell === c.id;
+      const iLeadThis = cLeaders.some(l => l.userId === u.id) || (u.role === "cell_leader" && u.domainCell === c.id);
+      const canManage = seeAll || iLeadThis;          // add leaders / view members
+      const leaderIds = new Set(cLeaders.map(l => l.userId));
+      const memberOpts = members.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
       return `
       <div class="card">
         <h2>${esc(c.name)} ${c.primary ? `<span class="pill global">Primary</span>` : ""}</h2>
@@ -185,21 +193,39 @@ async function cellsView() {
         <div class="row">
           ${mine ? `<button class="btn ghost sm" disabled>✓ Your cell</button>`
                  : `<button class="btn sm" data-join="${c.id}">Join ${esc(c.name)}</button>`}
-          ${auth.canConfigure() ? `<button class="btn gold sm" data-addleader="${c.id}">+ Add leader</button>` : ""}
         </div>
+        ${canManage ? `
+          <label>Add a leader (from members of this cell)</label>
+          <form class="row addleader-form" data-cell="${c.id}">
+            <select name="userId" required>
+              <option value="">${members.length ? "Select a member…" : "No members to promote yet"}</option>
+              ${memberOpts}
+            </select>
+            <button class="btn gold sm" type="submit">Make leader</button>
+          </form>
+          <div style="margin-top:12px" class="meta"><b>Members in ${esc(c.name)}</b> — you can see these because you lead or oversee this cell.</div>
+          ${members.length ? members.map(m => `
+            <div class="item">
+              <h3>${esc(memberName(m))} ${leaderIds.has(m.id) ? `<span class="pill role">Leader</span>` : ""}</h3>
+              <div class="meta">${esc(m.email || "")}${m.cellNumber ? " · " + esc(m.cellNumber) : ""}</div>
+            </div>`).join("") : `<div class="empty">No members in this cell yet.</div>`}
+        ` : ""}
       </div>`;
     }).join("")}`;
 }
 
 async function groupsView() {
+  const u = auth.current;
   const groups = (await db.list("connectGroups")).sort((a, b) => b.createdAt - a.createdAt);
+  const users = await db.list("users");
   const canManage = auth.canLeadCell();
   const meetings = await db.list("meetings");
   const feedback = await db.list("feedback");
+  const memberOptions = users.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
   return `
     <div class="card">
       <h2>Connect Groups</h2>
-      <p class="sub">Geographical groups that meet monthly. Leaders record meetings and submit feedback.</p>
+      <p class="sub">Geographical groups that meet monthly. Leaders add members from the database, record meetings, and submit feedback — and see only their own group's members.</p>
       ${canManage ? `
       <form id="group-form" class="row">
         <input name="name" placeholder="Group name" required>
@@ -210,16 +236,30 @@ async function groupsView() {
     ${groups.length ? groups.map(g => {
       const gm = meetings.filter(m => m.groupId === g.id).sort((a, b) => b.date - a.date);
       const gf = feedback.filter(f => f.groupId === g.id).sort((a, b) => b.createdAt - a.createdAt);
-      const isLeader = g.leaderId === auth.current.id || auth.canConfigure();
+      const isLeader = g.leaderId === u.id || auth.canConfigure();
+      const memberIds = g.members || [];
+      const gMembers = users.filter(x => memberIds.includes(x.id));
       return `
       <div class="card">
         <h2>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h2>
-        <p class="sub">Leader: ${esc(g.leaderName)}</p>
+        <p class="sub">Leader: ${esc(g.leaderName)} · ${memberIds.length} member(s)</p>
         ${isLeader ? `
           <div class="row">
             <button class="btn ghost sm" data-meeting="${g.id}">+ Log monthly meeting</button>
             <button class="btn ghost sm" data-feedback="${g.id}">+ Submit feedback</button>
-          </div>` : ""}
+          </div>
+          <label>Add a member (from the member database)</label>
+          <form class="row addmember-form" data-group="${g.id}">
+            <select name="userId" required><option value="">Select a member…</option>${memberOptions}</select>
+            <button class="btn gold sm" type="submit">Add</button>
+          </form>
+          <div style="margin-top:10px" class="meta"><b>Members in this group</b></div>
+          ${gMembers.length ? gMembers.map(m => `
+            <div class="item">
+              <h3>${esc(memberName(m))}</h3>
+              <div class="meta">${esc(m.email || "")}${m.cellNumber ? " · " + esc(m.cellNumber) : ""}</div>
+            </div>`).join("") : `<div class="empty">No members added yet.</div>`}
+        ` : ""}
         ${gm.length ? `<div class="item"><div class="meta">Last meeting: ${fmt(gm[0].date)} — ${esc(gm[0].notes || "")}</div></div>` : ""}
         ${gf.length ? gf.slice(0, 3).map(f => `<div class="item"><p>💬 ${esc(f.text)}</p><div class="meta">${esc(f.authorName)} · ${fmt(f.createdAt)}</div></div>`).join("") : ""}
       </div>`;
@@ -321,11 +361,19 @@ async function moreView() {
     ${auth.isAdmin() ? `
     <div class="card">
       <h2>Administration <span class="pill role">Admin</span></h2>
-      <p class="sub">Master database: ${users.length} member(s). Manage roles below.</p>
+      <p class="sub">Master member database: ${users.length} member(s). Full access. Add people here or promote leaders — every person is one linked member record.</p>
+      <label>Add a person to the member database</label>
+      <form id="addperson-form" class="grid2">
+        <div><input name="name" placeholder="Name" required></div>
+        <div><input name="surname" placeholder="Surname" required></div>
+        <div><input name="email" type="email" placeholder="Email (optional)"></div>
+        <div><select name="domainCell">${DOMAIN_CELLS.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></div>
+      </form>
+      <button class="btn gold sm" id="addperson-btn" style="margin:4px 0 12px">+ Add to member database</button>
       ${users.map(x => `
         <div class="item">
-          <h3>${esc(x.name)} ${esc(x.surname)}</h3>
-          <div class="meta">${esc(x.email)} · ${esc(cellName(x.domainCell))}</div>
+          <h3>${esc(memberName(x))}</h3>
+          <div class="meta">${esc(x.email || "no login")} · ${esc(cellName(x.domainCell))}</div>
           <select data-role-for="${x.id}" style="margin-top:6px">
             ${ROLES.map(r => `<option value="${r.id}" ${r.id === x.role ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
           </select>
@@ -371,15 +419,22 @@ function wire() {
     render();
   };
 
-  // Cells: join + add leader
+  // Cells: join a cell
   v.querySelectorAll("[data-join]").forEach(b => b.onclick = async () => {
     await db.update("users", u.id, { domainCell: b.dataset.join });
     render();
   });
-  v.querySelectorAll("[data-addleader]").forEach(b => b.onclick = async () => {
-    const name = prompt("Leader name to add to this cell:");
-    if (!name) return;
-    await db.insert("cellLeaders", { cellId: b.dataset.addleader, name });
+  // Cells: promote an existing member to leader (linked to the member database)
+  v.querySelectorAll(".addleader-form").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const cellId = f.dataset.cell;
+    const userId = f.querySelector("[name=userId]").value;
+    if (!userId) return;
+    const m = await db.get("users", userId);
+    await db.insert("cellLeaders", { cellId, userId, name: memberName(m) });
+    // Promote to Domain Cell Leader without demoting higher (church-level) roles.
+    if (!m.role || m.role === "member") await db.update("users", userId, { role: "cell_leader", domainCell: cellId });
+    await notify("Leader assigned", `${memberName(m)} now leads ${cellName(cellId)}.`);
     render();
   });
 
@@ -388,9 +443,21 @@ function wire() {
   if (gForm) gForm.onsubmit = async e => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
-    await db.insert("connectGroups", { name: f.name, area: f.area, leaderId: u.id, leaderName: `${u.name} ${u.surname}` });
+    await db.insert("connectGroups", { name: f.name, area: f.area, leaderId: u.id, leaderName: `${u.name} ${u.surname}`, members: [] });
     render();
   };
+  // Groups: add an existing member (linked to the member database)
+  v.querySelectorAll(".addmember-form").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const groupId = f.dataset.group;
+    const userId = f.querySelector("[name=userId]").value;
+    if (!userId) return;
+    const g = await db.get("connectGroups", groupId);
+    const members = g.members || [];
+    if (!members.includes(userId)) members.push(userId);
+    await db.update("connectGroups", groupId, { members });
+    render();
+  });
   v.querySelectorAll("[data-meeting]").forEach(b => b.onclick = async () => {
     const notes = prompt("Meeting notes (attendance, topics):");
     if (notes === null) return;
@@ -461,6 +528,18 @@ function wire() {
     await db.update("users", sel.dataset.roleFor, { role: sel.value });
     render();
   });
+  const apBtn = $("#addperson-btn");
+  if (apBtn) apBtn.onclick = async () => {
+    const form = $("#addperson-form");
+    if (!form.reportValidity()) return;
+    const f = Object.fromEntries(new FormData(form));
+    await db.insert("users", {
+      name: f.name, surname: f.surname, email: (f.email || "").trim(),
+      domainCell: f.domainCell || "church", role: "member", consent: true, addedByAdmin: true
+    });
+    await notify("Member added", `${f.name} ${f.surname} added to the member database.`);
+    render();
+  };
   const lo = $("#logout");
   if (lo) lo.onclick = () => { auth.logout(); boot(); };
 }
