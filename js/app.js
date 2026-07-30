@@ -103,7 +103,7 @@ function shell(inner) {
   const u = auth.current;
   const navItems = [
     ["home", "🏠", "Home"], ["calendar", "📅", "Calendar"], ["cells", "🌐", "Cells"],
-    ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "Stories"],
+    ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "My Testimony"],
     ["more", "⚙️", "More"]
   ];
   $("#root").innerHTML = `
@@ -208,25 +208,62 @@ async function homeView() {
     </div>`;
 }
 
+let calCursor = null; // { y, m } month currently shown
+
 async function calendarView() {
   const u = auth.current;
-  const events = (await db.list("events")).filter(e => e.scope === "global" || e.cellId === u.domainCell);
+  const seeAll = seeAllMembers(); // admins/pastoral/senior see the whole church
+  const all = await db.list("events");
+  const events = seeAll ? all : all.filter(e => e.scope === "global" || e.cellId === u.domainCell);
   const canAdd = auth.canLeadCell();
-  const year = new Date().getFullYear();
   const today = todayStr();
-  const yearEvents = events.filter(e => new Date(e.date + "T00:00:00").getFullYear() === year)
+  if (!calCursor) { const n = new Date(); calCursor = { y: n.getFullYear(), m: n.getMonth() }; }
+  const { y, m } = calCursor;
+
+  const monthEvents = events
+    .filter(e => { const d = new Date(e.date + "T00:00:00"); return d.getFullYear() === y && d.getMonth() === m; })
     .sort((a, b) => evTs(a) - evTs(b));
+  const evByDay = {};
+  monthEvents.forEach(e => { const d = new Date(e.date + "T00:00:00").getDate(); (evByDay[d] ||= []).push(e); });
+
+  const startDay = new Date(y, m, 1).getDay();          // 0 = Sun
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  while (cells.length % 7) cells.push(null);
+
   const cellOpts = DOMAIN_CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
     .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-  const byMonth = {};
-  yearEvents.forEach(e => { const m = new Date(e.date + "T00:00:00").getMonth(); (byMonth[m] ||= []).push(e); });
+
   return `
     <div class="card">
-      <h2>${year} Calendar 📅</h2>
-      <p class="sub">Church-wide and your cell's events for the year.</p>
-      ${canAdd ? `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <button class="btn ghost sm" data-calnav="-1">‹</button>
+        <h2 style="margin:0">${MONTHS[m]} ${y} 📅</h2>
+        <button class="btn ghost sm" data-calnav="1">›</button>
+      </div>
+      <p class="sub">${monthEvents.length} activit${monthEvents.length === 1 ? "y" : "ies"}${seeAll ? " · whole church" : " · your church + cell"}</p>
+      <div class="cal-grid">
+        ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => `<div class="cal-h">${d}</div>`).join("")}
+        ${cells.map(d => {
+          if (d === null) return `<div class="cal-cell cal-empty"></div>`;
+          const ds = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+          const evs = evByDay[d] || [];
+          return `<div class="cal-cell${ds === today ? " cal-today" : ""}">
+            <div class="cal-day">${d}</div>
+            ${evs.slice(0, 3).map(e => `<div class="cal-ev ${e.scope}" title="${esc(e.title)}">${esc(e.title)}</div>`).join("")}
+            ${evs.length > 3 ? `<div class="cal-more">+${evs.length - 3} more</div>` : ""}
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+
+    ${canAdd ? `
+    <div class="card">
+      <h2>Add an activity</h2>
       <form id="event-form">
-        <label>Event title</label><input name="title" required>
+        <label>Title</label><input name="title" required>
         <div class="row">
           <div><label>Date</label><input name="date" type="date" required></div>
           <div><label>Scope</label>
@@ -241,19 +278,19 @@ async function calendarView() {
           <div><label>Note (optional)</label><input name="note"></div>
         </div>
         <div style="height:10px"></div>
-        <button class="btn" type="submit">Add event</button>
-      </form>` : ""}
-    </div>
-    ${Object.keys(byMonth).length ? Object.keys(byMonth).map(m => `
-      <div class="card">
-        <h2>${MONTHS[m]}</h2>
-        ${byMonth[m].map(e => `
-          <div class="item">
-            <h3>${e.date < today ? "<span style='opacity:.45'>✓ </span>" : ""}${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
-            <div class="meta">${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}${e.authorName ? " · " + esc(e.authorName) : ""}</div>
-            ${(auth.canConfigure() || e.authorId === u.id) ? `<button class="btn ghost sm" data-delevent="${e.id}" style="margin-top:6px">Remove</button>` : ""}
-          </div>`).join("")}
-      </div>`).join("") : `<div class="card"><div class="empty">No events yet for ${year}.</div></div>`}`;
+        <button class="btn" type="submit">Add activity</button>
+      </form>
+    </div>` : ""}
+
+    <div class="card">
+      <h2>Activities in ${MONTHS[m]}</h2>
+      ${monthEvents.length ? monthEvents.map(e => `
+        <div class="item">
+          <h3>${e.date < today ? "<span style='opacity:.45'>✓ </span>" : ""}${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
+          <div class="meta">${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}${e.authorName ? " · " + esc(e.authorName) : ""}</div>
+          ${(auth.canConfigure() || e.authorId === u.id) ? `<button class="btn ghost sm" data-delevent="${e.id}" style="margin-top:6px">Remove</button>` : ""}
+        </div>`).join("") : `<div class="empty">No activities this month.</div>`}
+    </div>`;
 }
 
 async function cellsView() {
@@ -549,6 +586,12 @@ function wire() {
   };
   v.querySelectorAll("[data-delevent]").forEach(b => b.onclick = async () => {
     await db.remove("events", b.dataset.delevent);
+    render();
+  });
+  v.querySelectorAll("[data-calnav]").forEach(b => b.onclick = () => {
+    let mm = calCursor.m + parseInt(b.dataset.calnav, 10), yy = calCursor.y;
+    if (mm < 0) { mm = 11; yy--; } else if (mm > 11) { mm = 0; yy++; }
+    calCursor = { y: yy, m: mm };
     render();
   });
 
