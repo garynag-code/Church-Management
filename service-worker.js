@@ -1,5 +1,5 @@
 // Offline-first caching for the PWA shell. Free, no backend required.
-const CACHE = "egc-connect-v2";
+const CACHE = "egc-connect-v3";
 const ASSETS = [
   "./",
   "./index.html",
