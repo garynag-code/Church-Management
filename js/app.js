@@ -102,8 +102,9 @@ function authScreen() {
 function shell(inner) {
   const u = auth.current;
   const navItems = [
-    ["home", "🏠", "Home"], ["calendar", "📅", "Calendar"], ["cells", "🌐", "Cells"],
+    ["home", "🏠", "Home"], ["upcoming", "📅", "Upcoming"], ["cells", "🌐", "Cells"],
     ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "My Testimony"],
+    ...(auth.canLeadCell() ? [["admin", "🛠️", "Admin"]] : []),
     ["more", "⚙️", "More"]
   ];
   $("#root").innerHTML = `
@@ -127,9 +128,6 @@ async function homeView() {
   const u = auth.current;
   const all = await db.list("announcements");
   const events = await db.list("events");
-  const canPost = auth.canLeadCell();
-  const cellOpts = DOMAIN_CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
-    .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
 
   // Announcements relevant to this user; important pinned first, then newest.
   const feed = all.filter(a => a.scope === "global" || a.cellId === u.domainCell)
@@ -148,34 +146,6 @@ async function homeView() {
       <h2>Welcome, ${esc(u.name)} 👋</h2>
       <p class="sub">${esc(cellName(u.domainCell))} · ${new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
     </div>
-
-    ${canPost ? `
-    <div class="card">
-      <h2>Post an announcement</h2>
-      <p class="sub">${auth.canPublishGlobal() ? "Global posts reach every Domain Cell." : "You can post locally to your cell."}</p>
-      <form id="ann-form">
-        <label>Title</label><input name="title" required>
-        <label>Message</label><textarea name="body" rows="2" required></textarea>
-        <div class="row">
-          <div>
-            <label>Scope</label>
-            <select name="scope">
-              ${auth.canPublishGlobal() ? `<option value="global">Global (whole church)</option>` : ""}
-              <option value="local">Local (a cell)</option>
-            </select>
-          </div>
-          <div>
-            <label>Cell (for local)</label>
-            <select name="cellId">${cellOpts}</select>
-          </div>
-        </div>
-        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
-          <input type="checkbox" name="important" style="width:auto"> <span class="hint">Mark as important (pinned on the landing page)</span>
-        </label>
-        <div style="height:10px"></div>
-        <button class="btn" type="submit">Publish</button>
-      </form>
-    </div>` : ""}
 
     ${important.length ? `
     <div class="card" style="border-left:4px solid var(--gold)">
@@ -208,89 +178,37 @@ async function homeView() {
     </div>`;
 }
 
-let calCursor = null; // { y, m } month currently shown
-
-async function calendarView() {
+async function upcomingView() {
   const u = auth.current;
   const seeAll = seeAllMembers(); // admins/pastoral/senior see the whole church
   const all = await db.list("events");
-  const events = seeAll ? all : all.filter(e => e.scope === "global" || e.cellId === u.domainCell);
-  const canAdd = auth.canLeadCell();
-  const today = todayStr();
-  if (!calCursor) { const n = new Date(); calCursor = { y: n.getFullYear(), m: n.getMonth() }; }
-  const { y, m } = calCursor;
-
-  const monthEvents = events
-    .filter(e => { const d = new Date(e.date + "T00:00:00"); return d.getFullYear() === y && d.getMonth() === m; })
+  const events = (seeAll ? all : all.filter(e => e.scope === "global" || e.cellId === u.domainCell))
     .sort((a, b) => evTs(a) - evTs(b));
-  const evByDay = {};
-  monthEvents.forEach(e => { const d = new Date(e.date + "T00:00:00").getDate(); (evByDay[d] ||= []).push(e); });
+  const today = todayStr();
+  const upcoming = events.filter(e => e.date >= today);
+  const past = events.filter(e => e.date < today).reverse(); // most recent first
 
-  const startDay = new Date(y, m, 1).getDay();          // 0 = Sun
-  const daysInMonth = new Date(y, m + 1, 0).getDate();
-  const cells = [];
-  for (let i = 0; i < startDay; i++) cells.push(null);
-  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-  while (cells.length % 7) cells.push(null);
-
-  const cellOpts = DOMAIN_CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
-    .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  const row = e => `
+    <div class="item">
+      <h3>${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
+      <div class="meta">📅 ${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}</div>
+    </div>`;
 
   return `
     <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <button class="btn ghost sm" data-calnav="-1">‹</button>
-        <h2 style="margin:0">${MONTHS[m]} ${y} 📅</h2>
-        <button class="btn ghost sm" data-calnav="1">›</button>
-      </div>
-      <p class="sub">${monthEvents.length} activit${monthEvents.length === 1 ? "y" : "ies"}${seeAll ? " · whole church" : " · your church + cell"}</p>
-      <div class="cal-grid">
-        ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => `<div class="cal-h">${d}</div>`).join("")}
-        ${cells.map(d => {
-          if (d === null) return `<div class="cal-cell cal-empty"></div>`;
-          const ds = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-          const evs = evByDay[d] || [];
-          return `<div class="cal-cell${ds === today ? " cal-today" : ""}">
-            <div class="cal-day">${d}</div>
-            ${evs.slice(0, 3).map(e => `<div class="cal-ev ${e.scope}" title="${esc(e.title)}">${esc(e.title)}</div>`).join("")}
-            ${evs.length > 3 ? `<div class="cal-more">+${evs.length - 3} more</div>` : ""}
-          </div>`;
-        }).join("")}
-      </div>
+      <h2>Upcoming Events 📅</h2>
+      <p class="sub">All ${seeAll ? "church" : "church &amp; cell"} activities, earliest first.</p>
+      ${upcoming.length ? upcoming.map(row).join("") : `<div class="empty">Nothing scheduled yet.</div>`}
     </div>
-
-    ${canAdd ? `
+    ${past.length ? `
     <div class="card">
-      <h2>Add an activity</h2>
-      <form id="event-form">
-        <label>Title</label><input name="title" required>
-        <div class="row">
-          <div><label>Date</label><input name="date" type="date" required></div>
-          <div><label>Scope</label>
-            <select name="scope">
-              ${auth.canPublishGlobal() ? `<option value="global">Church-wide</option>` : ""}
-              <option value="local">My cell</option>
-            </select>
-          </div>
-        </div>
-        <div class="row">
-          <div><label>Cell (for local)</label><select name="cellId">${cellOpts}</select></div>
-          <div><label>Note (optional)</label><input name="note"></div>
-        </div>
-        <div style="height:10px"></div>
-        <button class="btn" type="submit">Add activity</button>
-      </form>
-    </div>` : ""}
-
-    <div class="card">
-      <h2>Activities in ${MONTHS[m]}</h2>
-      ${monthEvents.length ? monthEvents.map(e => `
-        <div class="item">
-          <h3>${e.date < today ? "<span style='opacity:.45'>✓ </span>" : ""}${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
-          <div class="meta">${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}${e.authorName ? " · " + esc(e.authorName) : ""}</div>
-          ${(auth.canConfigure() || e.authorId === u.id) ? `<button class="btn ghost sm" data-delevent="${e.id}" style="margin-top:6px">Remove</button>` : ""}
-        </div>`).join("") : `<div class="empty">No activities this month.</div>`}
-    </div>`;
+      <h2 style="opacity:.7">Past events</h2>
+      ${past.slice(0, 20).map(e => `
+        <div class="item" style="opacity:.6">
+          <h3>${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
+          <div class="meta">${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}</div>
+        </div>`).join("")}
+    </div>` : ""}`;
 }
 
 async function cellsView() {
@@ -308,11 +226,8 @@ async function cellsView() {
       const cLeaders = leaders.filter(l => l.cellId === c.id);
       const mine = u.domainCell === c.id;
       const iLeadThis = cLeaders.some(l => l.userId === u.id) || (u.role === "cell_leader" && u.domainCell === c.id);
-      const canManage = seeAll || iLeadThis;               // add/promote leaders
-      const canViewMembers = canManage || u.domainCell === c.id; // members see their own cell's contacts
+      const canViewMembers = seeAll || iLeadThis || u.domainCell === c.id; // members see their own cell's contacts
       const leaderIds = new Set(cLeaders.map(l => l.userId));
-      // Leaders can be drawn from the whole member database, not just this cell.
-      const memberOpts = users.map(m => `<option value="${m.id}">${esc(memberName(m))}${m.domainCell && m.domainCell !== c.id ? " (" + esc(cellName(m.domainCell)) + ")" : ""}</option>`).join("");
       return `
       <div class="card">
         <h2>${esc(c.name)} ${c.primary ? `<span class="pill global">Primary</span>` : ""}</h2>
@@ -321,15 +236,6 @@ async function cellsView() {
           ${mine ? `<button class="btn ghost sm" disabled>✓ Your cell</button>`
                  : `<button class="btn sm" data-join="${c.id}">Join ${esc(c.name)}</button>`}
         </div>
-        ${canManage ? `
-          <label>Add a leader (from the member database)</label>
-          <form class="row addleader-form" data-cell="${c.id}">
-            <select name="userId" required>
-              <option value="">Select a member…</option>
-              ${memberOpts}
-            </select>
-            <button class="btn gold sm" type="submit">Make leader</button>
-          </form>` : ""}
         ${canViewMembers ? `
           <div style="margin-top:12px" class="meta"><b>Contacts in ${esc(c.name)}</b></div>
           ${members.length ? members.map(m => `
@@ -346,53 +252,28 @@ async function groupsView() {
   const u = auth.current;
   const groups = (await db.list("connectGroups")).sort((a, b) => b.createdAt - a.createdAt);
   const users = await db.list("users");
-  const canManage = auth.canLeadCell();
-  const meetings = await db.list("meetings");
-  const feedback = await db.list("feedback");
-  const memberOptions = users.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
   return `
     <div class="card">
       <h2>Connect Groups</h2>
-      <p class="sub">Geographical groups that meet monthly. Leaders add members from the database, record meetings, and submit feedback — and see only their own group's members.</p>
-      ${canManage ? `
-      <form id="group-form" class="row">
-        <input name="name" placeholder="Group name" required>
-        <input name="area" placeholder="Area / suburb" required>
-        <button class="btn sm" type="submit">Create</button>
-      </form>` : ""}
+      <p class="sub">Geographical groups that meet monthly. You see the contacts of groups you belong to or lead.</p>
     </div>
     ${groups.length ? groups.map(g => {
-      const gm = meetings.filter(m => m.groupId === g.id).sort((a, b) => b.date - a.date);
-      const gf = feedback.filter(f => f.groupId === g.id).sort((a, b) => b.createdAt - a.createdAt);
       const isLeader = g.leaderId === u.id || auth.canConfigure();
       const memberIds = g.members || [];
       const gMembers = users.filter(x => memberIds.includes(x.id));
-      const inGroup = memberIds.includes(u.id);
-      const canViewGroup = isLeader || inGroup;   // members of the group see its contacts
+      const canViewGroup = isLeader || memberIds.includes(u.id);
       return `
       <div class="card">
         <h2>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h2>
         <p class="sub">Leader: ${esc(g.leaderName)} · ${memberIds.length} member(s)</p>
-        ${isLeader ? `
-          <div class="row">
-            <button class="btn ghost sm" data-meeting="${g.id}">+ Log monthly meeting</button>
-            <button class="btn ghost sm" data-feedback="${g.id}">+ Submit feedback</button>
-          </div>
-          <label>Add a member (from the member database)</label>
-          <form class="row addmember-form" data-group="${g.id}">
-            <select name="userId" required><option value="">Select a member…</option>${memberOptions}</select>
-            <button class="btn gold sm" type="submit">Add</button>
-          </form>` : ""}
         ${canViewGroup ? `
-          <div style="margin-top:10px" class="meta"><b>Contacts in this group</b></div>
+          <div style="margin-top:6px" class="meta"><b>Contacts in this group</b></div>
           ${gMembers.length ? gMembers.map(m => `
             <div class="item">
               <h3>${esc(memberName(m))}</h3>
               <div class="meta">${esc(m.email || "")}${m.cellNumber ? " · " + esc(m.cellNumber) : ""}</div>
             </div>`).join("") : `<div class="empty">No members added yet.</div>`}
-        ` : ""}
-        ${isLeader && gm.length ? `<div class="item"><div class="meta">Last meeting: ${fmt(gm[0].date)} — ${esc(gm[0].notes || "")}</div></div>` : ""}
-        ${isLeader && gf.length ? gf.slice(0, 3).map(f => `<div class="item"><p>💬 ${esc(f.text)}</p><div class="meta">${esc(f.authorName)} · ${fmt(f.createdAt)}</div></div>`).join("") : ""}
+        ` : `<div class="meta" style="margin-top:6px">Join this group to see its contacts.</div>`}
       </div>`;
     }).join("") : `<div class="empty">No connect groups yet.</div>`}`;
 }
@@ -456,28 +337,19 @@ async function testimoniesView() {
         <div class="item">
           <p>${esc(t.text)} ${!t.approved ? `<span class="pill local">Pending review</span>` : ""}</p>
           <div class="meta">${esc(t.authorName)} · ${fmt(t.createdAt)}</div>
-          ${!t.approved && auth.canConfigure() ? `<button class="btn ghost sm" data-approve="${t.id}" style="margin-top:6px">Approve</button>` : ""}
         </div>`).join("") : `<div class="empty">No testimonies yet.</div>`}
     </div>`;
 }
 
 async function moreView() {
   const u = auth.current;
-  const users = auth.isAdmin() ? await db.list("users") : [];
   const notifs = (await db.list("notifications")).filter(n => n.userId === u.id || n.userId === "all")
     .sort((a, b) => b.createdAt - a.createdAt).slice(0, 8);
   return `
     <div class="card">
       <h2>Notifications & Reminders</h2>
-      <p class="sub">Free web-push + in-app reminders for meetings, feedback and duties.</p>
+      <p class="sub">Reminders for meetings, feedback and duties.</p>
       <button class="btn ghost sm" id="enable-push">Enable device notifications</button>
-      ${auth.canLeadCell() ? `
-        <form id="duty-form" style="margin-top:12px">
-          <div class="row">
-            <input name="text" placeholder="Assign a duty / reminder…" required>
-            <button class="btn sm" type="submit">Send</button>
-          </div>
-        </form>` : ""}
       <div style="margin-top:8px">
         ${notifs.length ? notifs.map(n => `<div class="item"><h3>${esc(n.title)}</h3><p>${esc(n.body)}</p><div class="meta">${fmt(n.createdAt)}</div></div>`).join("") : `<div class="empty">No notifications.</div>`}
       </div>
@@ -507,10 +379,142 @@ async function moreView() {
       </form>
     </div>
 
+    <div class="card">
+      <h2>About & data</h2>
+      <p class="sub">Mode: <b>${db.mode === "sync" ? "Synced (Supabase free tier)" : "Local (this device)"}</b></p>
+      <button class="btn danger sm" id="logout">Sign out</button>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// ADMIN — the single hub for creating / managing everything
+// ---------------------------------------------------------------------------
+async function adminView() {
+  const u = auth.current;
+  const users = await db.list("users");
+  const groups = (await db.list("connectGroups")).sort((a, b) => b.createdAt - a.createdAt);
+  const meetings = await db.list("meetings");
+  const leaders = await db.list("cellLeaders");
+  const pending = (await db.list("testimonies")).filter(t => !t.approved).sort((a, b) => b.createdAt - a.createdAt);
+  const memberOptions = users.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
+  const cellOpts = DOMAIN_CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
+    .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+
+  return `
+    <div class="card">
+      <h2>Admin 🛠️</h2>
+      <p class="sub">Create and manage everything here. The other tabs stay clean for viewing.</p>
+    </div>
+
+    <div class="card">
+      <h2>📣 Post an announcement</h2>
+      <form id="ann-form">
+        <label>Title</label><input name="title" required>
+        <label>Message</label><textarea name="body" rows="2" required></textarea>
+        <div class="row">
+          <div><label>Scope</label>
+            <select name="scope">
+              ${auth.canPublishGlobal() ? `<option value="global">Global (whole church)</option>` : ""}
+              <option value="local">Local (a cell)</option>
+            </select>
+          </div>
+          <div><label>Cell (for local)</label><select name="cellId">${cellOpts}</select></div>
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <input type="checkbox" name="important" style="width:auto"> <span class="hint">Mark as important (pinned on the landing page)</span>
+        </label>
+        <div style="height:10px"></div>
+        <button class="btn" type="submit">Publish</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>📅 Add a calendar activity</h2>
+      <form id="event-form">
+        <label>Title</label><input name="title" required>
+        <div class="row">
+          <div><label>Date</label><input name="date" type="date" required></div>
+          <div><label>Scope</label>
+            <select name="scope">
+              ${auth.canPublishGlobal() ? `<option value="global">Church-wide</option>` : ""}
+              <option value="local">My cell</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div><label>Cell (for local)</label><select name="cellId">${cellOpts}</select></div>
+          <div><label>Note (optional)</label><input name="note"></div>
+        </div>
+        <div style="height:10px"></div>
+        <button class="btn" type="submit">Add activity</button>
+      </form>
+    </div>
+
+    ${auth.canConfigure() ? `
+    <div class="card">
+      <h2>👑 Assign domain cell leaders</h2>
+      ${DOMAIN_CELLS.map(c => {
+        const cl = leaders.filter(l => l.cellId === c.id);
+        return `
+        <div class="item">
+          <h3>${esc(c.name)}</h3>
+          <div class="meta">${cl.length ? "Leaders: " + cl.map(l => esc(l.name)).join(", ") : "No leaders yet"}</div>
+          <form class="row addleader-form" data-cell="${c.id}" style="margin-top:6px">
+            <select name="userId" required><option value="">Select a member…</option>${memberOptions}</select>
+            <button class="btn gold sm" type="submit">Make leader</button>
+          </form>
+        </div>`;
+      }).join("")}
+    </div>` : ""}
+
+    <div class="card">
+      <h2>📍 Connect groups</h2>
+      <form id="group-form" class="row">
+        <input name="name" placeholder="Group name" required>
+        <input name="area" placeholder="Area / suburb" required>
+        <button class="btn sm" type="submit">Create</button>
+      </form>
+      ${groups.length ? groups.map(g => {
+        const gm = meetings.filter(m => m.groupId === g.id).sort((a, b) => b.date - a.date);
+        return `
+        <div class="item">
+          <h3>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h3>
+          <div class="meta">Leader: ${esc(g.leaderName)} · ${(g.members || []).length} member(s)${gm.length ? " · last meeting " + fmt(gm[0].date) : ""}</div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn ghost sm" data-meeting="${g.id}">+ Log meeting</button>
+            <button class="btn ghost sm" data-feedback="${g.id}">+ Feedback</button>
+          </div>
+          <form class="row addmember-form" data-group="${g.id}" style="margin-top:6px">
+            <select name="userId" required><option value="">Add a member…</option>${memberOptions}</select>
+            <button class="btn gold sm" type="submit">Add</button>
+          </form>
+        </div>`;
+      }).join("") : `<div class="empty">No connect groups yet.</div>`}
+    </div>
+
+    ${auth.canConfigure() ? `
+    <div class="card">
+      <h2>✨ Testimonies awaiting approval</h2>
+      ${pending.length ? pending.map(t => `
+        <div class="item">
+          <p>${esc(t.text)}</p>
+          <div class="meta">${esc(t.authorName)} · ${fmt(t.createdAt)}</div>
+          <button class="btn ghost sm" data-approve="${t.id}" style="margin-top:6px">Approve</button>
+        </div>`).join("") : `<div class="empty">Nothing pending.</div>`}
+    </div>` : ""}
+
+    <div class="card">
+      <h2>🔔 Send a reminder / duty</h2>
+      <form id="duty-form" class="row">
+        <input name="text" placeholder="Reminder or duty for everyone…" required>
+        <button class="btn sm" type="submit">Send</button>
+      </form>
+    </div>
+
     ${auth.isAdmin() ? `
     <div class="card">
-      <h2>Administration <span class="pill role">Admin</span></h2>
-      <p class="sub">Master member database: ${users.length} member(s). Full access. Add people here or promote leaders — every person is one linked member record.</p>
+      <h2>👥 Member database <span class="pill role">Admin</span></h2>
+      <p class="sub">${users.length} member(s). Add people and manage roles.</p>
       <label>Add a person to the member database</label>
       <form id="addperson-form" class="grid2">
         <div><input name="name" placeholder="Name" required></div>
@@ -527,19 +531,13 @@ async function moreView() {
             ${ROLES.map(r => `<option value="${r.id}" ${r.id === x.role ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
           </select>
         </div>`).join("")}
-    </div>` : ""}
-
-    <div class="card">
-      <h2>About & data</h2>
-      <p class="sub">Mode: <b>${db.mode === "sync" ? "Synced (Supabase free tier)" : "Local (this device)"}</b></p>
-      <button class="btn danger sm" id="logout">Sign out</button>
-    </div>`;
+    </div>` : ""}`;
 }
 
 // ---------------------------------------------------------------------------
 // RENDER + EVENT WIRING
 // ---------------------------------------------------------------------------
-const VIEWS = { home: homeView, calendar: calendarView, cells: cellsView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, more: moreView };
+const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, admin: adminView, more: moreView };
 
 async function render() {
   await auth.refresh();
@@ -586,12 +584,6 @@ function wire() {
   };
   v.querySelectorAll("[data-delevent]").forEach(b => b.onclick = async () => {
     await db.remove("events", b.dataset.delevent);
-    render();
-  });
-  v.querySelectorAll("[data-calnav]").forEach(b => b.onclick = () => {
-    let mm = calCursor.m + parseInt(b.dataset.calnav, 10), yy = calCursor.y;
-    if (mm < 0) { mm = 11; yy--; } else if (mm > 11) { mm = 0; yy++; }
-    calCursor = { y: yy, m: mm };
     render();
   });
 
