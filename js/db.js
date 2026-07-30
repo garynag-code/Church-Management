@@ -18,7 +18,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY, isSyncEnabled } from "./config.js";
 const COLLECTIONS = [
   "users", "cellLeaders", "announcements", "connectGroups",
   "meetings", "feedback", "prayerRequests", "testimonies",
-  "notifications", "duties"
+  "notifications", "duties", "events"
 ];
 
 function uid() {

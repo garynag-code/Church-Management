@@ -13,6 +13,10 @@ const fmt = ts => new Date(ts).toLocaleString();
 const roleName = id => (ROLES.find(r => r.id === id) || {}).name || id;
 const cellName = id => (DOMAIN_CELLS.find(c => c.id === id) || {}).name || id;
 const memberName = x => `${x.name || ""} ${x.surname || ""}`.trim() || (x.email || "Member");
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const evTs = d => new Date(d + "T00:00:00").getTime();
+const dayFmt = d => new Date(d + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+const todayStr = () => { const n = new Date(); return new Date(n.getTime() - n.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
 // Church-level roles see the full member database and every cell/group.
 const seeAllMembers = () => auth.canConfigure(); // admin + pastoral core + senior pastors
 
@@ -98,8 +102,9 @@ function authScreen() {
 function shell(inner) {
   const u = auth.current;
   const navItems = [
-    ["home", "🏠", "Home"], ["cells", "🌐", "Cells"], ["groups", "📍", "Groups"],
-    ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "Stories"], ["more", "⚙️", "More"]
+    ["home", "🏠", "Home"], ["calendar", "📅", "Calendar"], ["cells", "🌐", "Cells"],
+    ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "Stories"],
+    ["more", "⚙️", "More"]
   ];
   $("#root").innerHTML = `
     <div class="topbar">
@@ -108,7 +113,7 @@ function shell(inner) {
       <div class="who">${esc(u.name)} ${esc(u.surname)}<br><span class="badge">${esc(roleName(u.role))}</span></div>
     </div>
     <div class="app"><div class="view" id="view">${inner}</div></div>
-    <nav class="nav">
+    <nav class="nav" style="grid-template-columns:repeat(${navItems.length},1fr)">
       ${navItems.map(([id, ico, label]) =>
         `<button data-nav="${id}" class="${view === id ? "active" : ""}"><span class="ico">${ico}</span>${label}</button>`).join("")}
     </nav>`;
@@ -121,18 +126,49 @@ function shell(inner) {
 async function homeView() {
   const u = auth.current;
   const all = await db.list("announcements");
-  // Church (global) announcements reach everyone; local ones only your cell.
-  const feed = all.filter(a => a.scope === "global" || a.cellId === u.domainCell)
-                  .sort((a, b) => b.createdAt - a.createdAt);
+  const events = await db.list("events");
   const canPost = auth.canLeadCell();
   const cellOpts = DOMAIN_CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
     .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
 
+  // Announcements relevant to this user; important pinned first, then newest.
+  const feed = all.filter(a => a.scope === "global" || a.cellId === u.domainCell)
+    .sort((a, b) => (b.important ? 1 : 0) - (a.important ? 1 : 0) || b.createdAt - a.createdAt);
+  const important = feed.filter(a => a.important).slice(0, 3);
+
+  // This week: events in the next 7 days relevant to this user.
+  const today = todayStr();
+  const weekEnd = (() => { const d = new Date(today + "T00:00:00"); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
+  const week = events
+    .filter(e => (e.scope === "global" || e.cellId === u.domainCell) && e.date >= today && e.date <= weekEnd)
+    .sort((a, b) => evTs(a) - evTs(b));
+
   return `
     <div class="card">
       <h2>Welcome, ${esc(u.name)} 👋</h2>
-      <p class="sub">Your primary domain is <b>Church</b>. Your cell: <b>${esc(cellName(u.domainCell))}</b>.</p>
+      <p class="sub">${esc(cellName(u.domainCell))} · ${new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
     </div>
+
+    ${important.length ? `
+    <div class="card" style="border-left:4px solid var(--gold)">
+      <h2>📌 Important</h2>
+      ${important.map(a => `
+        <div class="item">
+          <h3>${esc(a.title)}</h3>
+          <div class="meta">${esc(a.authorName)} · ${fmt(a.createdAt)}</div>
+          <p>${esc(a.body)}</p>
+        </div>`).join("")}
+    </div>` : ""}
+
+    <div class="card">
+      <h2>This week</h2>
+      ${week.length ? week.map(e => `
+        <div class="item">
+          <h3>${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
+          <div class="meta">📅 ${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}</div>
+        </div>`).join("") : `<div class="empty">Nothing scheduled this week.</div>`}
+    </div>
+
     ${canPost ? `
     <div class="card">
       <h2>Post an announcement</h2>
@@ -143,7 +179,7 @@ async function homeView() {
         <div class="row">
           <div>
             <label>Scope</label>
-            <select name="scope" id="ann-scope">
+            <select name="scope">
               ${auth.canPublishGlobal() ? `<option value="global">Global (whole church)</option>` : ""}
               <option value="local">Local (a cell)</option>
             </select>
@@ -153,19 +189,71 @@ async function homeView() {
             <select name="cellId">${cellOpts}</select>
           </div>
         </div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <input type="checkbox" name="important" style="width:auto"> <span class="hint">Mark as important (pinned on the landing page)</span>
+        </label>
         <div style="height:10px"></div>
         <button class="btn" type="submit">Publish</button>
       </form>
     </div>` : ""}
+
     <div class="card">
-      <h2>Announcements & Activities</h2>
+      <h2>Announcements</h2>
       ${feed.length ? feed.map(a => `
         <div class="item">
-          <h3>${esc(a.title)} <span class="pill ${a.scope}">${a.scope === "global" ? "Church-wide" : esc(cellName(a.cellId))}</span></h3>
+          <h3>${a.important ? "📌 " : ""}${esc(a.title)} <span class="pill ${a.scope}">${a.scope === "global" ? "Church-wide" : esc(cellName(a.cellId))}</span></h3>
           <div class="meta">${esc(a.authorName)} · ${fmt(a.createdAt)}</div>
           <p>${esc(a.body)}</p>
         </div>`).join("") : `<div class="empty">No announcements yet.</div>`}
     </div>`;
+}
+
+async function calendarView() {
+  const u = auth.current;
+  const events = (await db.list("events")).filter(e => e.scope === "global" || e.cellId === u.domainCell);
+  const canAdd = auth.canLeadCell();
+  const year = new Date().getFullYear();
+  const today = todayStr();
+  const yearEvents = events.filter(e => new Date(e.date + "T00:00:00").getFullYear() === year)
+    .sort((a, b) => evTs(a) - evTs(b));
+  const cellOpts = DOMAIN_CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
+    .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  const byMonth = {};
+  yearEvents.forEach(e => { const m = new Date(e.date + "T00:00:00").getMonth(); (byMonth[m] ||= []).push(e); });
+  return `
+    <div class="card">
+      <h2>${year} Calendar 📅</h2>
+      <p class="sub">Church-wide and your cell's events for the year.</p>
+      ${canAdd ? `
+      <form id="event-form">
+        <label>Event title</label><input name="title" required>
+        <div class="row">
+          <div><label>Date</label><input name="date" type="date" required></div>
+          <div><label>Scope</label>
+            <select name="scope">
+              ${auth.canPublishGlobal() ? `<option value="global">Church-wide</option>` : ""}
+              <option value="local">My cell</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div><label>Cell (for local)</label><select name="cellId">${cellOpts}</select></div>
+          <div><label>Note (optional)</label><input name="note"></div>
+        </div>
+        <div style="height:10px"></div>
+        <button class="btn" type="submit">Add event</button>
+      </form>` : ""}
+    </div>
+    ${Object.keys(byMonth).length ? Object.keys(byMonth).map(m => `
+      <div class="card">
+        <h2>${MONTHS[m]}</h2>
+        ${byMonth[m].map(e => `
+          <div class="item">
+            <h3>${e.date < today ? "<span style='opacity:.45'>✓ </span>" : ""}${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
+            <div class="meta">${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}${e.authorName ? " · " + esc(e.authorName) : ""}</div>
+            ${(auth.canConfigure() || e.authorId === u.id) ? `<button class="btn ghost sm" data-delevent="${e.id}" style="margin-top:6px">Remove</button>` : ""}
+          </div>`).join("")}
+      </div>`).join("") : `<div class="card"><div class="empty">No events yet for ${year}.</div></div>`}`;
 }
 
 async function cellsView() {
@@ -414,7 +502,7 @@ async function moreView() {
 // ---------------------------------------------------------------------------
 // RENDER + EVENT WIRING
 // ---------------------------------------------------------------------------
-const VIEWS = { home: homeView, cells: cellsView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, more: moreView };
+const VIEWS = { home: homeView, calendar: calendarView, cells: cellsView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, more: moreView };
 
 async function render() {
   await auth.refresh();
@@ -437,11 +525,32 @@ function wire() {
     await db.insert("announcements", {
       title: f.title, body: f.body, scope,
       cellId: scope === "global" ? null : f.cellId,
+      important: !!f.important,
       authorId: u.id, authorName: `${u.name} ${u.surname}`
     });
     await notify("New announcement", f.title);
     render();
   };
+
+  // Calendar: add / remove events
+  const evForm = $("#event-form");
+  if (evForm) evForm.onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    if (!f.title || !f.date) return;
+    const scope = auth.canPublishGlobal() ? (f.scope || "global") : "local";
+    await db.insert("events", {
+      title: f.title, date: f.date, note: f.note || "", scope,
+      cellId: scope === "global" ? null : (f.cellId || u.domainCell),
+      authorId: u.id, authorName: `${u.name} ${u.surname}`
+    });
+    await notify("Event added", `${f.title} · ${dayFmt(f.date)}`);
+    render();
+  };
+  v.querySelectorAll("[data-delevent]").forEach(b => b.onclick = async () => {
+    await db.remove("events", b.dataset.delevent);
+    render();
+  });
 
   // Cells: join a cell
   v.querySelectorAll("[data-join]").forEach(b => b.onclick = async () => {
