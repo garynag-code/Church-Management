@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2B2D8E"/>
+      <stop offset="1" stop-color="#3C3FB0"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="104" fill="url(#bg)"/>
+
+  <!-- Globe -->
+  <g transform="translate(256 280)">
+    <circle r="118" fill="none" stroke="#FFFFFF" stroke-width="10"/>
+    <!-- parallels -->
+    <path d="M-118 -40 H118 M-118 0 H118 M-118 40 H118" stroke="#FFFFFF" stroke-width="7" fill="none" opacity="0.9"/>
+    <!-- meridians -->
+    <ellipse rx="46" ry="118" fill="none" stroke="#FFFFFF" stroke-width="7" opacity="0.9"/>
+    <line x1="0" y1="-118" x2="0" y2="118" stroke="#FFFFFF" stroke-width="7" opacity="0.9"/>
+  </g>
+
+  <!-- Crown of people arcing over the top -->
+  <g fill="#F4B400">
+    <g transform="translate(196 150)"><circle r="17"/><path d="M-20 40 A20 26 0 0 1 20 40 Z"/></g>
+    <g transform="translate(256 128)"><circle r="19"/><path d="M-22 46 A22 28 0 0 1 22 46 Z"/></g>
+    <g transform="translate(316 150)"><circle r="17"/><path d="M-20 40 A20 26 0 0 1 20 40 Z"/></g>
+  </g>
+</svg>

@@ -1,0 +1,19 @@
+{
+  "name": "Ecclesia Glocal Church Family Connect",
+  "short_name": "EGC Connect",
+  "description": "Ecclesia Glocal Church Family Connect: domains, cells, connect groups, prayer and testimonies.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0E1230",
+  "theme_color": "#2B2D8E",
+  "icons": [
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
