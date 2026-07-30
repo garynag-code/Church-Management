@@ -149,26 +149,6 @@ async function homeView() {
       <p class="sub">${esc(cellName(u.domainCell))} · ${new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
     </div>
 
-    ${important.length ? `
-    <div class="card" style="border-left:4px solid var(--gold)">
-      <h2>📌 Important</h2>
-      ${important.map(a => `
-        <div class="item">
-          <h3>${esc(a.title)}</h3>
-          <div class="meta">${esc(a.authorName)} · ${fmt(a.createdAt)}</div>
-          <p>${esc(a.body)}</p>
-        </div>`).join("")}
-    </div>` : ""}
-
-    <div class="card">
-      <h2>This week</h2>
-      ${week.length ? week.map(e => `
-        <div class="item">
-          <h3>${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
-          <div class="meta">📅 ${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}</div>
-        </div>`).join("") : `<div class="empty">Nothing scheduled this week.</div>`}
-    </div>
-
     ${canPost ? `
     <div class="card">
       <h2>Post an announcement</h2>
@@ -196,6 +176,26 @@ async function homeView() {
         <button class="btn" type="submit">Publish</button>
       </form>
     </div>` : ""}
+
+    ${important.length ? `
+    <div class="card" style="border-left:4px solid var(--gold)">
+      <h2>📌 Important</h2>
+      ${important.map(a => `
+        <div class="item">
+          <h3>${esc(a.title)}</h3>
+          <div class="meta">${esc(a.authorName)} · ${fmt(a.createdAt)}</div>
+          <p>${esc(a.body)}</p>
+        </div>`).join("")}
+    </div>` : ""}
+
+    <div class="card">
+      <h2>This week</h2>
+      ${week.length ? week.map(e => `
+        <div class="item">
+          <h3>${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
+          <div class="meta">📅 ${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}</div>
+        </div>`).join("") : `<div class="empty">Nothing scheduled this week.</div>`}
+    </div>
 
     <div class="card">
       <h2>Announcements</h2>
