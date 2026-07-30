@@ -183,9 +183,11 @@ async function cellsView() {
       const cLeaders = leaders.filter(l => l.cellId === c.id);
       const mine = u.domainCell === c.id;
       const iLeadThis = cLeaders.some(l => l.userId === u.id) || (u.role === "cell_leader" && u.domainCell === c.id);
-      const canManage = seeAll || iLeadThis;          // add leaders / view members
+      const canManage = seeAll || iLeadThis;               // add/promote leaders
+      const canViewMembers = canManage || u.domainCell === c.id; // members see their own cell's contacts
       const leaderIds = new Set(cLeaders.map(l => l.userId));
-      const memberOpts = members.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
+      // Leaders can be drawn from the whole member database, not just this cell.
+      const memberOpts = users.map(m => `<option value="${m.id}">${esc(memberName(m))}${m.domainCell && m.domainCell !== c.id ? " (" + esc(cellName(m.domainCell)) + ")" : ""}</option>`).join("");
       return `
       <div class="card">
         <h2>${esc(c.name)} ${c.primary ? `<span class="pill global">Primary</span>` : ""}</h2>
@@ -195,15 +197,16 @@ async function cellsView() {
                  : `<button class="btn sm" data-join="${c.id}">Join ${esc(c.name)}</button>`}
         </div>
         ${canManage ? `
-          <label>Add a leader (from members of this cell)</label>
+          <label>Add a leader (from the member database)</label>
           <form class="row addleader-form" data-cell="${c.id}">
             <select name="userId" required>
-              <option value="">${members.length ? "Select a member…" : "No members to promote yet"}</option>
+              <option value="">Select a member…</option>
               ${memberOpts}
             </select>
             <button class="btn gold sm" type="submit">Make leader</button>
-          </form>
-          <div style="margin-top:12px" class="meta"><b>Members in ${esc(c.name)}</b> — you can see these because you lead or oversee this cell.</div>
+          </form>` : ""}
+        ${canViewMembers ? `
+          <div style="margin-top:12px" class="meta"><b>Contacts in ${esc(c.name)}</b></div>
           ${members.length ? members.map(m => `
             <div class="item">
               <h3>${esc(memberName(m))} ${leaderIds.has(m.id) ? `<span class="pill role">Leader</span>` : ""}</h3>
@@ -239,6 +242,8 @@ async function groupsView() {
       const isLeader = g.leaderId === u.id || auth.canConfigure();
       const memberIds = g.members || [];
       const gMembers = users.filter(x => memberIds.includes(x.id));
+      const inGroup = memberIds.includes(u.id);
+      const canViewGroup = isLeader || inGroup;   // members of the group see its contacts
       return `
       <div class="card">
         <h2>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h2>
@@ -252,16 +257,17 @@ async function groupsView() {
           <form class="row addmember-form" data-group="${g.id}">
             <select name="userId" required><option value="">Select a member…</option>${memberOptions}</select>
             <button class="btn gold sm" type="submit">Add</button>
-          </form>
-          <div style="margin-top:10px" class="meta"><b>Members in this group</b></div>
+          </form>` : ""}
+        ${canViewGroup ? `
+          <div style="margin-top:10px" class="meta"><b>Contacts in this group</b></div>
           ${gMembers.length ? gMembers.map(m => `
             <div class="item">
               <h3>${esc(memberName(m))}</h3>
               <div class="meta">${esc(m.email || "")}${m.cellNumber ? " · " + esc(m.cellNumber) : ""}</div>
             </div>`).join("") : `<div class="empty">No members added yet.</div>`}
         ` : ""}
-        ${gm.length ? `<div class="item"><div class="meta">Last meeting: ${fmt(gm[0].date)} — ${esc(gm[0].notes || "")}</div></div>` : ""}
-        ${gf.length ? gf.slice(0, 3).map(f => `<div class="item"><p>💬 ${esc(f.text)}</p><div class="meta">${esc(f.authorName)} · ${fmt(f.createdAt)}</div></div>`).join("") : ""}
+        ${isLeader && gm.length ? `<div class="item"><div class="meta">Last meeting: ${fmt(gm[0].date)} — ${esc(gm[0].notes || "")}</div></div>` : ""}
+        ${isLeader && gf.length ? gf.slice(0, 3).map(f => `<div class="item"><p>💬 ${esc(f.text)}</p><div class="meta">${esc(f.authorName)} · ${fmt(f.createdAt)}</div></div>`).join("") : ""}
       </div>`;
     }).join("") : `<div class="empty">No connect groups yet.</div>`}`;
 }
@@ -354,8 +360,26 @@ async function moreView() {
 
     <div class="card">
       <h2>My profile</h2>
-      <p class="sub">${esc(u.email)} · ${esc(cellName(u.domainCell))}</p>
-      <div class="meta">${esc(u.occupation || "")}${u.company ? " @ " + esc(u.company) : ""}${u.familyGroup ? " · Family: " + esc(u.familyGroup) : ""}</div>
+      <p class="sub">Your record in the member database — edit and save.</p>
+      <form id="profile-form">
+        <div class="grid2">
+          <div><label>Name</label><input name="name" value="${esc(u.name || "")}" required></div>
+          <div><label>Surname</label><input name="surname" value="${esc(u.surname || "")}" required></div>
+          <div><label>Age</label><input name="age" type="number" min="0" max="120" value="${esc(u.age || "")}"></div>
+          <div><label>Gender</label><select name="gender">${["", "Female", "Male", "Other", "Prefer not to say"].map(g => `<option value="${g}" ${(u.gender || "") === g ? "selected" : ""}>${g || "—"}</option>`).join("")}</select></div>
+          <div><label>School</label><input name="school" value="${esc(u.school || "")}"></div>
+          <div><label>Cell number</label><input name="cellNumber" type="tel" value="${esc(u.cellNumber || "")}"></div>
+          <div><label>Email</label><input name="email" type="email" value="${esc(u.email || "")}"></div>
+          <div><label>Family group</label><input name="familyGroup" value="${esc(u.familyGroup || "")}"></div>
+          <div><label>Occupation</label><input name="occupation" value="${esc(u.occupation || "")}"></div>
+          <div><label>Company</label><input name="company" value="${esc(u.company || "")}"></div>
+          <div><label>Domain Cell</label><select name="domainCell">${DOMAIN_CELLS.map(c => `<option value="${c.id}" ${u.domainCell === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></div>
+        </div>
+        <label>Home address</label><textarea name="homeAddress" rows="2">${esc(u.homeAddress || "")}</textarea>
+        <div class="error hidden" id="profile-err"></div>
+        <div style="height:10px"></div>
+        <button class="btn" type="submit">Save profile</button>
+      </form>
     </div>
 
     ${auth.isAdmin() ? `
@@ -528,6 +552,27 @@ function wire() {
     await db.update("users", sel.dataset.roleFor, { role: sel.value });
     render();
   });
+  const pfForm = $("#profile-form");
+  if (pfForm) pfForm.onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    const newEmail = (f.email || "").trim();
+    if (newEmail && newEmail.toLowerCase() !== (u.email || "").toLowerCase()) {
+      const all = await db.list("users");
+      if (all.some(x => x.id !== u.id && (x.email || "").toLowerCase() === newEmail.toLowerCase())) {
+        const el = $("#profile-err"); el.textContent = "That email is already in use."; el.classList.remove("hidden");
+        return;
+      }
+    }
+    await db.update("users", u.id, {
+      name: f.name, surname: f.surname, age: f.age, gender: f.gender, school: f.school,
+      cellNumber: f.cellNumber, email: newEmail, familyGroup: f.familyGroup,
+      occupation: f.occupation, company: f.company, domainCell: f.domainCell, homeAddress: f.homeAddress
+    });
+    await auth.refresh();
+    await notify("Profile updated", "Your details were saved.");
+    render();
+  };
   const apBtn = $("#addperson-btn");
   if (apBtn) apBtn.onclick = async () => {
     const form = $("#addperson-form");
