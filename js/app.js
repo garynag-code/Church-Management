@@ -239,7 +239,7 @@ function shell(inner) {
   const u = auth.current;
   const navItems = [
     ["home", "🏠", "Home"], ["upcoming", "📅", "Upcoming"], ["cells", "🌐", "Cells"],
-    ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "My Testimony"],
+    ["members", "👥", "Members"], ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "My Testimony"],
     ["resources", "📚", "Resources"], ["kids", "🧒", "EGC Kids"], ["youth", "🔥", "EGC Youth"],
     ...(auth.canLeadCell() ? [["admin", "🛠️", "Admin"]] : []),
     ["more", "⚙️", "More"]
@@ -406,6 +406,49 @@ async function cellsView() {
         ` : ""}
       </div>`;
     }).join("")}`;
+}
+
+// Clean member directory: everyone listed under their title (Administrator,
+// Senior Pastor, Pastoral Core, Domain Cell Leader, Member). Church-level
+// roles see the whole church; members see people in their cell/groups.
+async function membersView() {
+  const u = auth.current;
+  const users = await db.list("users");
+  const leaders = await db.list("cellLeaders");
+  const groups = await db.list("connectGroups");
+  const seeAll = seeAllMembers();
+
+  const myGroupMemberIds = new Set();
+  groups.forEach(g => {
+    if ((g.members || []).includes(u.id) || g.leaderId === u.id)
+      (g.members || []).forEach(id => myGroupMemberIds.add(id));
+  });
+  const visible = seeAll ? users : users.filter(x =>
+    x.id === u.id || x.domainCell === u.domainCell || myGroupMemberIds.has(x.id));
+
+  // A member who has been assigned as a cell leader is titled Domain Cell Leader.
+  const leaderIds = new Set(leaders.map(l => l.userId));
+  const titleOf = x => (leaderIds.has(x.id) && x.role === "member") ? "cell_leader" : x.role;
+
+  const order = ["administrator", "senior_pastor", "pastoral_core", "cell_leader", "member"];
+  const byRole = {};
+  visible.forEach(x => { const t = titleOf(x); (byRole[t] ||= []).push(x); });
+  const sections = order.filter(r => byRole[r] && byRole[r].length);
+
+  return `
+    <div class="card">
+      <h2>👥 Members</h2>
+      <p class="sub">${visible.length} ${seeAll ? "member(s) across the church" : "contact(s) you can see"}, listed with their title.</p>
+    </div>
+    ${sections.length ? sections.map(r => `
+      <div class="card">
+        <h2>${esc(roleName(r))} <span class="pill role">${byRole[r].length}</span></h2>
+        ${byRole[r].slice().sort((a, b) => memberName(a).localeCompare(memberName(b))).map(m => `
+          <div class="item">
+            <h3>${esc(memberName(m))} <span class="pill role">${esc(roleName(titleOf(m)))}</span></h3>
+            <div class="meta">${esc(cellName(m.domainCell))}${m.email ? " · " + esc(m.email) : ""}${m.cellNumber ? " · " + esc(m.cellNumber) : ""}</div>
+          </div>`).join("")}
+      </div>`).join("") : `<div class="card"><div class="empty">No members to show yet.</div></div>`}`;
 }
 
 async function groupsView() {
@@ -845,7 +888,7 @@ async function adminView() {
         </div>`).join("") : `<div class="empty">No activities you can manage.</div>`}
     </div>
 
-    ${auth.canConfigure() ? `
+    ${auth.isAdmin() ? `
     <div class="card">
       <h2>🌐 Domain cells</h2>
       <p class="sub">Rename or add domain cells. The primary (Church) can't be removed.</p>
@@ -879,6 +922,7 @@ async function adminView() {
       }).join("")}
     </div>` : ""}
 
+    ${auth.isAdmin() ? `
     <div class="card">
       <h2>📍 Connect groups</h2>
       <form id="group-form" class="row">
@@ -910,7 +954,7 @@ async function adminView() {
           ${(g.members || []).length ? `<div class="meta" style="margin-top:6px">Members: ${(g.members || []).map(mid => { const m = users.find(x => x.id === mid); return m ? `${esc(memberName(m))} <a href="#" data-groupremove="${g.id}:${mid}" title="remove from group" style="color:var(--danger);text-decoration:none">✕</a>` : ""; }).filter(Boolean).join(" · ")}</div>` : ""}
         </div>`;
       }).join("") : `<div class="empty">No connect groups yet.</div>`}
-    </div>
+    </div>` : ""}
 
     ${auth.canConfigure() ? `
     <div class="card">
@@ -1127,7 +1171,7 @@ async function adminView() {
 // ---------------------------------------------------------------------------
 // RENDER + EVENT WIRING
 // ---------------------------------------------------------------------------
-const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, resources: resourcesView, kids: kidsView, youth: youthView, admin: adminView, more: moreView };
+const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, members: membersView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, resources: resourcesView, kids: kidsView, youth: youthView, admin: adminView, more: moreView };
 
 async function render() {
   await auth.refresh();
