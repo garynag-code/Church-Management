@@ -375,10 +375,16 @@ async function groupsView() {
       const gDuties = allDuties.filter(d => d.groupId === g.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
       const myDuties = gDuties.filter(d => d.memberId === u.id);
       const memberOpts = gMembers.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
+      const inGroup = memberIds.includes(u.id);
       return `
       <div class="card">
         <h2>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h2>
         <p class="sub">Leader: ${esc(g.leaderName)} · ${memberIds.length} member(s)</p>
+        <div class="row">
+          ${g.leaderId === u.id ? `<button class="btn ghost sm" disabled>✓ You lead this group</button>`
+            : inGroup ? `<button class="btn ghost sm" data-groupleave="${g.id}">Leave group</button>`
+            : `<button class="btn sm" data-groupjoin="${g.id}">Join ${esc(g.name)}</button>`}
+        </div>
         ${isLeader && gVisits.length ? `
           <div class="meta" style="margin-top:6px"><b>🙋 Visit requests</b></div>
           ${gVisits.map(x => `
@@ -1186,6 +1192,21 @@ function wire() {
   };
   v.querySelectorAll("[data-visitdone]").forEach(b => b.onclick = async () => {
     await db.update("visits", b.dataset.visitdone, { status: "done" });
+    render();
+  });
+
+  // Members self-join / leave a connect group
+  v.querySelectorAll("[data-groupjoin]").forEach(b => b.onclick = async () => {
+    const g = await db.get("connectGroups", b.dataset.groupjoin);
+    if (!g) return;
+    const members = g.members || [];
+    if (!members.includes(u.id)) { members.push(u.id); await db.update("connectGroups", g.id, { members }); }
+    render();
+  });
+  v.querySelectorAll("[data-groupleave]").forEach(b => b.onclick = async () => {
+    const g = await db.get("connectGroups", b.dataset.groupleave);
+    if (!g) return;
+    await db.update("connectGroups", g.id, { members: (g.members || []).filter(m => m !== u.id) });
     render();
   });
 
