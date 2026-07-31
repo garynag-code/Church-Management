@@ -299,6 +299,20 @@ async function groupsView() {
   const groups = (await db.list("connectGroups")).sort((a, b) => b.createdAt - a.createdAt);
   const users = await db.list("users");
   const visits = (await db.list("visits")).filter(x => x.status !== "done");
+  const allDuties = await db.list("groupDuties");
+  const prayers = await db.list("prayerRequests");
+  const testis = await db.list("testimonies");
+
+  const dutyRow = (d, leader) => `
+    <div class="item">
+      <h3>${esc(d.task)} ${d.done ? `<span class="pill role">Done</span>` : ""}</h3>
+      <div class="meta">${esc(d.memberName)}${d.date ? " · " + dayFmt(d.date) : ""}</div>
+      <div class="row" style="margin-top:6px">
+        <button class="btn ghost sm" data-dutytoggle="${d.id}">${d.done ? "Mark not done" : "Mark done"}</button>
+        ${leader ? `<button class="btn ghost sm" data-dutydel="${d.id}">Remove</button>` : ""}
+      </div>
+    </div>`;
+
   return `
     <div class="card">
       <h2>Connect Groups</h2>
@@ -310,6 +324,9 @@ async function groupsView() {
       const gMembers = users.filter(x => memberIds.includes(x.id));
       const canViewGroup = isLeader || memberIds.includes(u.id);
       const gVisits = visits.filter(x => (x.groupIds || []).includes(g.id));
+      const gDuties = allDuties.filter(d => d.groupId === g.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      const myDuties = gDuties.filter(d => d.memberId === u.id);
+      const memberOpts = gMembers.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
       return `
       <div class="card">
         <h2>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h2>
@@ -322,8 +339,33 @@ async function groupsView() {
               <div class="meta">${esc(x.contact || "")}${x.note ? " · " + esc(x.note) : ""} · ${fmt(x.createdAt)}</div>
               <button class="btn ghost sm" data-visitdone="${x.id}" style="margin-top:6px">Mark done</button>
             </div>`).join("")}` : ""}
+        ${isLeader ? `
+          <div class="meta" style="margin-top:10px"><b>🗓️ Assign a weekly duty</b></div>
+          <form class="duty-assign-form" data-group="${g.id}">
+            <div class="row">
+              <div><label>Member</label><select name="memberId" required><option value="">Select…</option>${memberOpts}</select></div>
+              <div><label>Week (date)</label><input name="date" type="date" required></div>
+            </div>
+            <label>Duty / task</label><input name="task" placeholder="e.g. Lead worship, bring refreshments" required>
+            <div style="height:8px"></div>
+            <button class="btn sm" type="submit">Assign duty</button>
+          </form>
+          ${gDuties.length ? `<div class="meta" style="margin-top:8px"><b>This group's duties</b></div>${gDuties.map(d => dutyRow(d, true)).join("")}` : ""}
+          <div class="meta" style="margin-top:10px"><b>📊 Engagement report</b></div>
+          ${gMembers.length ? gMembers.map(m => {
+            const md = gDuties.filter(x => x.memberId === m.id);
+            const done = md.filter(x => x.done).length;
+            return `<div class="item">
+              <h3>${esc(memberName(m))}</h3>
+              <div class="meta">Duties ${done}/${md.length} done · 🙏 ${prayers.filter(x => x.authorId === m.id).length} prayer(s) · ✨ ${testis.filter(x => x.authorId === m.id).length} testimony(ies)</div>
+            </div>`;
+          }).join("") : `<div class="empty">No members yet.</div>`}
+        ` : ""}
+        ${(!isLeader && memberIds.includes(u.id) && myDuties.length) ? `
+          <div class="meta" style="margin-top:6px"><b>🗓️ My duties</b></div>
+          ${myDuties.map(d => dutyRow(d, false)).join("")}` : ""}
         ${canViewGroup ? `
-          <div style="margin-top:6px" class="meta"><b>Contacts in this group</b></div>
+          <div style="margin-top:10px" class="meta"><b>Contacts in this group</b></div>
           ${gMembers.length ? gMembers.map(m => `
             <div class="item">
               <h3>${esc(memberName(m))}</h3>
@@ -992,6 +1034,27 @@ function wire() {
   };
   v.querySelectorAll("[data-visitdone]").forEach(b => b.onclick = async () => {
     await db.update("visits", b.dataset.visitdone, { status: "done" });
+    render();
+  });
+
+  // Weekly duties assigned by connect-group leaders
+  v.querySelectorAll(".duty-assign-form").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(f));
+    if (!d.memberId) return;
+    const m = await db.get("users", d.memberId);
+    await db.insert("groupDuties", { groupId: f.dataset.group, memberId: d.memberId, memberName: m ? memberName(m) : "", date: d.date, task: d.task, done: false, assignedBy: u.id });
+    await db.insert("notifications", { userId: d.memberId, title: "New duty assigned", body: `${d.task}${d.date ? " (" + d.date + ")" : ""}` });
+    await notify("Duty assigned", d.task);
+    render();
+  });
+  v.querySelectorAll("[data-dutytoggle]").forEach(b => b.onclick = async () => {
+    const d = await db.get("groupDuties", b.dataset.dutytoggle);
+    if (d) await db.update("groupDuties", d.id, { done: !d.done });
+    render();
+  });
+  v.querySelectorAll("[data-dutydel]").forEach(b => b.onclick = async () => {
+    await db.remove("groupDuties", b.dataset.dutydel);
     render();
   });
 
