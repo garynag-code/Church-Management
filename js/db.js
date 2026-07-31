@@ -19,7 +19,7 @@ const COLLECTIONS = [
   "users", "cellLeaders", "announcements", "connectGroups",
   "meetings", "feedback", "prayerRequests", "testimonies",
   "notifications", "duties", "events", "resources", "settings", "visits",
-  "roster", "preaching", "groupDuties"
+  "roster", "preaching", "groupDuties", "resourceCategories"
 ];
 
 function uid() {
