@@ -111,6 +111,9 @@ const remote = {
 // --- Unified async facade ---------------------------------------------------
 const impl = isSyncEnabled() ? remote : local;
 
+// Expose the Supabase client (for Supabase Auth in auth.js). Null in local mode.
+export async function getSupabase() { return isSyncEnabled() ? await supabase() : null; }
+
 export const db = {
   mode: isSyncEnabled() ? "sync" : "local",
   collections: COLLECTIONS,

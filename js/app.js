@@ -104,6 +104,7 @@ function authScreen() {
         <div class="error hidden" id="login-err"></div>
         <div style="height:12px"></div>
         <button class="btn" type="submit">Sign in</button>
+        ${isSyncEnabled() ? `<div style="text-align:center;margin-top:10px"><a href="#" id="forgot-link" class="hint">Forgot password?</a></div>` : ""}
       </form>
 
       <form id="reg-form" class="card hidden">
@@ -143,6 +144,15 @@ function authScreen() {
     const f = Object.fromEntries(new FormData(e.target));
     try { await auth.login(f.email, f.password); boot(); }
     catch (err) { const el = $("#login-err"); el.textContent = err.message; el.classList.remove("hidden"); }
+  };
+  const forgot = $("#forgot-link");
+  if (forgot) forgot.onclick = async e => {
+    e.preventDefault();
+    const email = ($("#login-form [name=email]").value || "").trim();
+    const el = $("#login-err");
+    if (!email) { el.textContent = "Enter your email above first, then tap Forgot password."; el.classList.remove("hidden"); return; }
+    try { await auth.resetPassword(email); el.textContent = "If that email has an account, a reset link is on its way."; el.classList.remove("hidden"); }
+    catch (err) { el.textContent = err.message; el.classList.remove("hidden"); }
   };
   $("#reg-form").onsubmit = async e => {
     e.preventDefault();
@@ -1347,7 +1357,7 @@ function wire() {
   };
 
   const lo = $("#logout");
-  if (lo) lo.onclick = () => { auth.logout(); boot(); };
+  if (lo) lo.onclick = async () => { await auth.logout(); boot(); };
 }
 
 // ---------------------------------------------------------------------------
