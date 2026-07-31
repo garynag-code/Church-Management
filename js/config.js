@@ -18,7 +18,7 @@ export const SUPABASE_URL = "";       // e.g. "https://xxxxxxxx.supabase.co"
 export const SUPABASE_ANON_KEY = "";  // the public "anon" key (safe to ship)
 
 // App version — bump on each release.
-export const APP_VERSION = "1.1.0";
+export const APP_VERSION = "1.1.1";
 export const APP_DATE = "2026-07-31";
 
 // Predefined Domain Cells. "church" is the primary domain (master database).
