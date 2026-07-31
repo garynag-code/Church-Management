@@ -47,7 +47,7 @@ export const auth = {
     if (isSyncEnabled()) {
       const sb = await getSupabase();
       const { data } = await sb.auth.getSession();
-      if (data.session) this.current = await this._ensureProfile(data.session.user, {});
+      if (data.session) this.current = await this._linkProfile(data.session.user, {});
       return this.current;
     }
     const id = localStorage.getItem(SESSION_KEY);
@@ -70,7 +70,7 @@ export const auth = {
         localStorage.setItem(PENDING_KEY, JSON.stringify(profileFields(form)));
         throw new Error("Almost there — check your email to confirm your account, then sign in.");
       }
-      this.current = await this._ensureProfile(data.session.user, profileFields(form));
+      this.current = await this._linkProfile(data.session.user, profileFields(form));
       return this.current;
     }
 
@@ -97,7 +97,7 @@ export const auth = {
       if (error) throw new Error(error.message);
       let pending = {};
       try { pending = JSON.parse(localStorage.getItem(PENDING_KEY) || "{}"); } catch { pending = {}; }
-      this.current = await this._ensureProfile(data.user, pending);
+      this.current = await this._linkProfile(data.user, pending);
       localStorage.removeItem(PENDING_KEY);
       return this.current;
     }
@@ -113,16 +113,19 @@ export const auth = {
     return user;
   },
 
-  // Ensure a profile row exists for a Supabase-authenticated user (keyed by uid).
-  async _ensureProfile(authUser, extra) {
-    let profile = await db.get("users", authUser.id);
+  // Link a Supabase-authenticated user to their profile BY EMAIL, so existing
+  // profiles (and all the data that references them) are preserved. Only creates
+  // a new profile when none exists for that email.
+  async _linkProfile(authUser, extra) {
+    const email = (authUser.email || extra.email || "").toLowerCase();
+    const users = await db.list("users");
+    let profile = users.find(x => (x.email || "").toLowerCase() === email);
     if (!profile) {
-      const isFirst = (await db.list("users")).length === 0;
+      const isFirst = users.length === 0;
       profile = await db.insert("users", {
-        id: authUser.id,
         email: authUser.email || extra.email || "",
         role: isFirst ? "administrator" : "member",
-        ...extra, id: authUser.id  // keep the auth uid as the row id
+        ...extra
       });
     }
     return profile;
