@@ -117,7 +117,7 @@ function shell(inner) {
   $("#root").innerHTML = `
     <div class="topbar">
       <img class="logo" src="./icons/icon.svg" alt="">
-      <div><h1>EGC Family Connect</h1></div>
+      <div><h1>EGC Family Connect</h1><div style="font-size:10px;opacity:.85">v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div></div>
       <div class="who">${esc(u.name)} ${esc(u.surname)}<br><span class="badge">${esc(roleName(u.role))}</span></div>
     </div>
     <div class="app"><div class="view" id="view">${inner}</div></div>

@@ -1,5 +1,6 @@
-// Offline-first caching for the PWA shell. Free, no backend required.
-const CACHE = "egc-connect-v10";
+// Network-first for the app shell so users always get the latest when online;
+// falls back to cache when offline. Free, no backend required.
+const CACHE = "egc-connect-v11";
 const ASSETS = [
   "./",
   "./index.html",
@@ -28,13 +29,13 @@ self.addEventListener("activate", e => {
 self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET") return;
-  // Network-first for cross-origin (e.g. Supabase); cache-first for app shell.
-  if (new URL(req.url).origin !== self.location.origin) return;
+  if (new URL(req.url).origin !== self.location.origin) return; // let cross-origin (e.g. Supabase) pass through
+  // Network-first: always fetch the latest when online, cache it, fall back to cache offline.
   e.respondWith(
-    caches.match(req).then(cached => cached || fetch(req).then(res => {
+    fetch(req).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
       return res;
-    }).catch(() => cached))
+    }).catch(() => caches.match(req))
   );
 });
