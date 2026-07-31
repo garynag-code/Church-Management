@@ -3,15 +3,30 @@
 // ---------------------------------------------------------------------------
 import { db } from "./db.js";
 import { auth } from "./auth.js";
-import { DOMAIN_CELLS, ROLES, isSyncEnabled, APP_VERSION, APP_DATE, APP_URL } from "./config.js";
+import { DOMAIN_CELLS as DEFAULT_CELLS, ROLES, isSyncEnabled, APP_VERSION, APP_DATE, APP_URL } from "./config.js";
 import { notify, initNotifications } from "./notifications.js";
+
+// Domain cells are data-driven so admins can rename/add them. Seeded from the
+// defaults on first run; loaded from the "domainCells" collection thereafter.
+let CELLS = DEFAULT_CELLS.map(c => ({ ...c }));
+async function loadCells() {
+  let rows = await db.list("domainCells");
+  if (!rows.length) {
+    for (let i = 0; i < DEFAULT_CELLS.length; i++) {
+      const c = DEFAULT_CELLS[i];
+      try { await db.insert("domainCells", { id: c.id, name: c.name, primary: !!c.primary, order: i }); } catch { /* ignore */ }
+    }
+    rows = await db.list("domainCells");
+  }
+  CELLS = rows.sort((a, b) => (b.primary ? 1 : 0) - (a.primary ? 1 : 0) || (a.order || 0) - (b.order || 0) || (a.createdAt || 0) - (b.createdAt || 0));
+}
 
 const $ = sel => document.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmt = ts => new Date(ts).toLocaleString();
 const roleName = id => (ROLES.find(r => r.id === id) || {}).name || id;
-const cellName = id => (DOMAIN_CELLS.find(c => c.id === id) || {}).name || id;
+const cellName = id => (CELLS.find(c => c.id === id) || {}).name || id;
 const memberName = x => `${x.name || ""} ${x.surname || ""}`.trim() || (x.email || "Member");
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const evTs = d => new Date(d + "T00:00:00").getTime();
@@ -43,7 +58,7 @@ const MEMBER_COLUMNS = [
   { label: "Home address", get: x => x.homeAddress }
 ];
 // Resource targeting: any domain cell, a ministry (kids/youth), or the whole church.
-const resTargetOptions = () => [...DOMAIN_CELLS.map(c => ({ id: c.id, name: c.name })), { id: "kids", name: "EGC Kingdom Image (Kids)" }, { id: "youth", name: "EGC Youth Ministry" }];
+const resTargetOptions = () => [...CELLS.map(c => ({ id: c.id, name: c.name })), { id: "kids", name: "EGC Kingdom Image (Kids)" }, { id: "youth", name: "EGC Youth Ministry" }];
 const resTargetName = id => (resTargetOptions().find(x => x.id === id) || {}).name || id;
 const resTarget = r => r.target || (r.kind === "kids" || r.kind === "youth" ? r.kind : "church");
 const resScope = r => r.scope || "global";
@@ -128,6 +143,7 @@ let deferredInstall = null; // captured beforeinstallprompt event (Android/Chrom
 let editAnn = null;   // announcement id being edited in the Admin hub
 let editEvent = null; // event id being edited in the Admin hub
 let editRes = null;   // resource id being edited in the Admin hub
+let editGroup = null; // connect group id being edited in the Admin hub
 let notifOpen = false;  // notifications dropdown open?
 let notifItems = [];    // computed each render
 
@@ -135,7 +151,7 @@ let notifItems = [];    // computed each render
 // AUTH SCREEN
 // ---------------------------------------------------------------------------
 function authScreen() {
-  const cellOpts = DOMAIN_CELLS.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  const cellOpts = CELLS.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
   $("#root").innerHTML = `
     <div class="auth-wrap">
       <div class="auth-hero">
@@ -365,7 +381,7 @@ async function cellsView() {
       <h2>Domain Cells</h2>
       <p class="sub">The <b>Church</b> is the primary domain with the master member database. Join any cell below. Leaders are drawn from the member database, and see only the members of their cell.</p>
     </div>
-    ${DOMAIN_CELLS.map(c => {
+    ${CELLS.map(c => {
       const members = users.filter(x => x.domainCell === c.id);
       const cLeaders = leaders.filter(l => l.cellId === c.id);
       const mine = u.domainCell === c.id;
@@ -592,7 +608,7 @@ async function moreView() {
           <div><label>Family group</label><input name="familyGroup" value="${esc(u.familyGroup || "")}"></div>
           <div><label>Occupation</label><input name="occupation" value="${esc(u.occupation || "")}"></div>
           <div><label>Company</label><input name="company" value="${esc(u.company || "")}"></div>
-          <div><label>Domain Cell</label><select name="domainCell">${DOMAIN_CELLS.map(c => `<option value="${c.id}" ${u.domainCell === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></div>
+          <div><label>Domain Cell</label><select name="domainCell">${CELLS.map(c => `<option value="${c.id}" ${u.domainCell === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></div>
         </div>
         <label>Home address</label><textarea name="homeAddress" rows="2">${esc(u.homeAddress || "")}</textarea>
         <div class="error hidden" id="profile-err"></div>
@@ -651,7 +667,7 @@ async function resourcesView() {
   });
   const byT = {};
   visible.forEach(r => { (byT[resTarget(r)] ||= []).push(r); });
-  const order = DOMAIN_CELLS.map(c => c.id).filter(id => (byT[id] || []).length);
+  const order = CELLS.map(c => c.id).filter(id => (byT[id] || []).length);
 
   return `
     <div class="card">
@@ -720,9 +736,9 @@ async function adminView() {
   const groupLeaderIds = new Set(groups.map(g => g.leaderId).filter(Boolean));
   const leaderMembers = users.filter(x => ["pastoral_core", "senior_pastor", "cell_leader"].includes(x.role) || groupLeaderIds.has(x.id));
   const scopeSel = (val) => `<select name="scope">${auth.canPublishGlobal() ? `<option value="global" ${val === "global" ? "selected" : ""}>Church-wide</option>` : ""}<option value="local" ${val === "local" ? "selected" : ""}>Local (a cell)</option></select>`;
-  const cellSel = (val) => `<select name="cellId">${DOMAIN_CELLS.map(c => `<option value="${c.id}" ${val === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>`;
+  const cellSel = (val) => `<select name="cellId">${CELLS.map(c => `<option value="${c.id}" ${val === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>`;
   const memberOptions = users.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
-  const cellOpts = DOMAIN_CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
+  const cellOpts = CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
     .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
 
   return `
@@ -831,8 +847,25 @@ async function adminView() {
 
     ${auth.canConfigure() ? `
     <div class="card">
+      <h2>🌐 Domain cells</h2>
+      <p class="sub">Rename or add domain cells. The primary (Church) can't be removed.</p>
+      <form id="addcell-form" class="row">
+        <input name="name" placeholder="New domain cell name" required>
+        <button class="btn sm" type="submit">Add cell</button>
+      </form>
+      ${CELLS.map(c => `
+        <form class="item cellname-form" data-id="${c.id}">
+          <div class="row">
+            <input name="name" value="${esc(c.name)}" required>
+            <button class="btn sm" type="submit">Save</button>
+            ${c.primary ? `<button class="btn ghost sm" type="button" disabled>Primary</button>` : `<button class="btn ghost sm" type="button" data-delcell="${c.id}">Remove</button>`}
+          </div>
+        </form>`).join("")}
+    </div>
+
+    <div class="card">
       <h2>👑 Assign domain cell leaders</h2>
-      ${DOMAIN_CELLS.map(c => {
+      ${CELLS.map(c => {
         const cl = leaders.filter(l => l.cellId === c.id);
         return `
         <div class="item">
@@ -855,12 +888,19 @@ async function adminView() {
       </form>
       ${groups.length ? groups.map(g => {
         const gm = meetings.filter(m => m.groupId === g.id).sort((a, b) => b.date - a.date);
+        if (editGroup === g.id) return `
+        <form class="item group-edit-form" data-id="${g.id}">
+          <div class="row"><div><label>Name</label><input name="name" value="${esc(g.name)}" required></div><div><label>Area</label><input name="area" value="${esc(g.area)}" required></div></div>
+          <div class="row" style="margin-top:8px"><button class="btn sm" type="submit">Save</button><button class="btn ghost sm" type="button" data-cancelgroupedit="1">Cancel</button></div>
+        </form>`;
         return `
         <div class="item">
           <h3>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h3>
           <div class="meta">Leader: ${esc(g.leaderName)} · ${(g.members || []).length} member(s)${gm.length ? " · last meeting " + fmt(gm[0].date) : ""}</div>
           <div class="row" style="margin-top:6px">
-            <button class="btn ghost sm" data-meeting="${g.id}">+ Log meeting</button>
+            <button class="btn ghost sm" data-editgroup="${g.id}">Edit</button>
+            <button class="btn ghost sm" data-delgroup="${g.id}">Delete</button>
+            <button class="btn ghost sm" data-meeting="${g.id}">+ Meeting</button>
             <button class="btn ghost sm" data-feedback="${g.id}">+ Feedback</button>
           </div>
           <form class="row addmember-form" data-group="${g.id}" style="margin-top:6px">
@@ -1036,7 +1076,7 @@ async function adminView() {
       </div>
       <div class="row" style="margin-top:8px">
         <div><label>Export a domain cell</label>
-          <select id="export-cell">${DOMAIN_CELLS.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>
+          <select id="export-cell">${CELLS.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>
         </div>
         <div style="display:flex;align-items:flex-end"><button class="btn ghost sm" id="export-cell-btn" type="button">Export cell</button></div>
       </div>
@@ -1060,7 +1100,7 @@ async function adminView() {
         <div><input name="name" placeholder="Name" required></div>
         <div><input name="surname" placeholder="Surname" required></div>
         <div><input name="email" type="email" placeholder="Email (optional)"></div>
-        <div><select name="domainCell">${DOMAIN_CELLS.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></div>
+        <div><select name="domainCell">${CELLS.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></div>
       </form>
       <button class="btn gold sm" id="addperson-btn" style="margin:4px 0 12px">+ Add to member database</button>
       ${users.map(x => `
@@ -1075,7 +1115,7 @@ async function adminView() {
             </div>
             <div><label>Domain cell</label>
               <select data-cell-for="${x.id}">
-                ${DOMAIN_CELLS.map(c => `<option value="${c.id}" ${x.domainCell === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+                ${CELLS.map(c => `<option value="${c.id}" ${x.domainCell === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
               </select>
             </div>
           </div>
@@ -1091,6 +1131,7 @@ const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, groups
 
 async function render() {
   await auth.refresh();
+  await loadCells();
   notifItems = await buildNotifications();
   const inner = await VIEWS[view]();
   shell(inner);
@@ -1225,6 +1266,43 @@ function wire() {
     await db.insert("connectGroups", { name: f.name, area: f.area, leaderId: u.id, leaderName: `${u.name} ${u.surname}`, members: [] });
     render();
   };
+  // Connect groups: edit name/area + delete
+  v.querySelectorAll("[data-editgroup]").forEach(b => b.onclick = () => { editGroup = b.dataset.editgroup; render(); });
+  v.querySelectorAll("[data-cancelgroupedit]").forEach(b => b.onclick = () => { editGroup = null; render(); });
+  v.querySelectorAll(".group-edit-form").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(f));
+    await db.update("connectGroups", f.dataset.id, { name: d.name, area: d.area });
+    editGroup = null; render();
+  });
+  v.querySelectorAll("[data-delgroup]").forEach(b => b.onclick = async () => {
+    if (!confirm("Delete this connect group? Members will be unassigned from it.")) return;
+    await db.remove("connectGroups", b.dataset.delgroup);
+    render();
+  });
+  // Domain cells: add / rename / remove
+  const addCell = $("#addcell-form");
+  if (addCell) addCell.onsubmit = async e => {
+    e.preventDefault();
+    const name = (new FormData(e.target).get("name") || "").toString().trim();
+    if (!name) return;
+    await db.insert("domainCells", { name, primary: false, order: CELLS.length });
+    render();
+  };
+  v.querySelectorAll(".cellname-form").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const name = (new FormData(f).get("name") || "").toString().trim();
+    if (!name) return;
+    await db.update("domainCells", f.dataset.id, { name });
+    render();
+  });
+  v.querySelectorAll("[data-delcell]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.delcell;
+    if (!confirm("Remove this domain cell? Its members will be moved to Church.")) return;
+    for (const m of (await db.list("users")).filter(x => x.domainCell === id)) await db.update("users", m.id, { domainCell: "church" });
+    await db.remove("domainCells", id);
+    render();
+  });
   // Groups: add an existing member (linked to the member database)
   v.querySelectorAll(".addmember-form").forEach(f => f.onsubmit = async e => {
     e.preventDefault();
