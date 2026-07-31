@@ -727,6 +727,7 @@ async function adminView() {
             <select name="userId" required><option value="">Add a member…</option>${memberOptions}</select>
             <button class="btn gold sm" type="submit">Add</button>
           </form>
+          ${(g.members || []).length ? `<div class="meta" style="margin-top:6px">Members: ${(g.members || []).map(mid => { const m = users.find(x => x.id === mid); return m ? `${esc(memberName(m))} <a href="#" data-groupremove="${g.id}:${mid}" title="remove from group" style="color:var(--danger);text-decoration:none">✕</a>` : ""; }).filter(Boolean).join(" · ")}</div>` : ""}
         </div>`;
       }).join("") : `<div class="empty">No connect groups yet.</div>`}
     </div>
@@ -854,10 +855,20 @@ async function adminView() {
       ${users.map(x => `
         <div class="item">
           <h3>${esc(memberName(x))}</h3>
-          <div class="meta">${esc(x.email || "no login")} · ${esc(cellName(x.domainCell))}</div>
-          <select data-role-for="${x.id}" style="margin-top:6px">
-            ${ROLES.map(r => `<option value="${r.id}" ${r.id === x.role ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
-          </select>
+          <div class="meta">${esc(x.email || "no login")}</div>
+          <div class="row" style="margin-top:6px">
+            <div><label>Role</label>
+              <select data-role-for="${x.id}">
+                ${ROLES.map(r => `<option value="${r.id}" ${r.id === x.role ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
+              </select>
+            </div>
+            <div><label>Domain cell</label>
+              <select data-cell-for="${x.id}">
+                ${DOMAIN_CELLS.map(c => `<option value="${c.id}" ${x.domainCell === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+          ${x.id === u.id ? `<div class="meta" style="margin-top:6px">(this is you)</div>` : `<button class="btn ghost sm" data-deluser="${x.id}" style="margin-top:6px">Remove from database</button>`}
         </div>`).join("")}
     </div>` : ""}`;
 }
@@ -1149,6 +1160,31 @@ function wire() {
   };
   v.querySelectorAll("[data-role-for]").forEach(sel => sel.onchange = async () => {
     await db.update("users", sel.dataset.roleFor, { role: sel.value });
+    render();
+  });
+  // Reallocate a member to a different domain cell
+  v.querySelectorAll("[data-cell-for]").forEach(sel => sel.onchange = async () => {
+    await db.update("users", sel.dataset.cellFor, { domainCell: sel.value });
+    render();
+  });
+  // Remove a member from the database (with cleanup of leadership + group membership)
+  v.querySelectorAll("[data-deluser]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.deluser;
+    if (id === u.id) return;
+    if (!confirm("Remove this person from the member database? This cannot be undone.")) return;
+    for (const l of (await db.list("cellLeaders")).filter(x => x.userId === id)) await db.remove("cellLeaders", l.id);
+    for (const g of await db.list("connectGroups")) {
+      if ((g.members || []).includes(id)) await db.update("connectGroups", g.id, { members: g.members.filter(m => m !== id) });
+    }
+    await db.remove("users", id);
+    render();
+  });
+  // Remove a member from a connect group
+  v.querySelectorAll("[data-groupremove]").forEach(b => b.onclick = async e => {
+    e.preventDefault();
+    const [gid, mid] = b.dataset.groupremove.split(":");
+    const g = await db.get("connectGroups", gid);
+    if (g) await db.update("connectGroups", gid, { members: (g.members || []).filter(m => m !== mid) });
     render();
   });
   const pfForm = $("#profile-form");
