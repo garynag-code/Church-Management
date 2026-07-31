@@ -529,6 +529,24 @@ async function moreView() {
     </div>
 
     <div class="card">
+      <h2>📲 Add to Home Screen</h2>
+      <p class="sub">Install the app for a full-screen, native feel and quick access.</p>
+      <div class="item">
+        <h3>iPhone / iPad (Safari)</h3>
+        <div class="meta">Tap <b>Share</b> (the box with an ↑) → scroll down → <b>Add to Home Screen</b> → <b>Add</b>.</div>
+      </div>
+      <div class="item">
+        <h3>Android (Chrome)</h3>
+        <div class="meta">Tap the <b>⋮</b> menu (top-right) → <b>Add to Home screen</b> (or <b>Install app</b>) → <b>Add</b>.</div>
+      </div>
+      <div class="item">
+        <h3>Samsung Internet</h3>
+        <div class="meta">Tap the <b>≡</b> menu → <b>Add page to</b> → <b>Home screen</b>.</div>
+      </div>
+      <div class="meta">Then open it from the new icon on your home screen — it runs full-screen like a normal app.</div>
+    </div>
+
+    <div class="card">
       <h2>About & data</h2>
       <p class="sub">Mode: <b>${db.mode === "sync" ? "Synced (Supabase free tier)" : "Local (this device)"}</b></p>
       ${db.mode === "sync" ? `
