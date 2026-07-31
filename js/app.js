@@ -175,16 +175,6 @@ async function homeView() {
     </div>
 
     <div class="card">
-      <h2>🙋 Request a visit</h2>
-      <p class="sub">Ask for a pastoral visit — it goes to your Connect Group leader and the church admins.</p>
-      <form id="visit-form">
-        <textarea name="note" rows="2" placeholder="Anything we should know? (optional)"></textarea>
-        <div style="height:8px"></div>
-        <button class="btn gold" type="submit">Request a visit</button>
-      </form>
-    </div>
-
-    <div class="card">
       <h2>Announcements</h2>
       ${feed.length ? feed.map(a => `
         <div class="item">
@@ -317,6 +307,15 @@ async function prayerView() {
       <div class="item"><p>“Do not be anxious about anything, but in every situation, by prayer and petition, with thanksgiving, present your requests to God.” — Philippians 4:6</p></div>
       <button class="btn ghost sm" id="prayer-timer">Start 3-minute prayer timer</button>
       <div id="timer-out" class="meta" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>🙋 Request a visit</h2>
+      <p class="sub">Ask for a pastoral visit — it goes to your Connect Group leader and the church admins.</p>
+      <form id="visit-form">
+        <textarea name="note" rows="2" placeholder="Anything we should know? (optional)"></textarea>
+        <div style="height:8px"></div>
+        <button class="btn gold" type="submit">Request a visit</button>
+      </form>
     </div>
     <div class="card">
       <h2>New prayer request</h2>
