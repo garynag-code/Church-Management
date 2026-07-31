@@ -96,6 +96,7 @@ let view = "home";
 let deferredInstall = null; // captured beforeinstallprompt event (Android/Chrome)
 let editAnn = null;   // announcement id being edited in the Admin hub
 let editEvent = null; // event id being edited in the Admin hub
+let editRes = null;   // resource id being edited in the Admin hub
 
 // ---------------------------------------------------------------------------
 // AUTH SCREEN
@@ -942,11 +943,36 @@ async function adminView() {
         <div style="height:10px"></div>
         <button class="btn gold" type="submit">Add resource</button>
       </form>
-      ${resources.length ? resources.map(r => `
+      ${resources.length ? resources.map(r => editRes === r.id ? `
+        <form class="item res-edit-form" data-id="${r.id}">
+          <div class="row">
+            <div><label>For (domain / ministry)</label>
+              <select name="target">${resTargetOptions().map(o => `<option value="${o.id}" ${resTarget(r) === o.id ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select>
+            </div>
+            <div><label>Classification</label>
+              <select name="scope"><option value="global" ${resScope(r) === "global" ? "selected" : ""}>Global (whole church)</option><option value="local" ${resScope(r) === "local" ? "selected" : ""}>Local (that domain/ministry only)</option></select>
+            </div>
+          </div>
+          <div class="row">
+            <div><label>Topic (optional)</label>
+              <select name="category"><option value="">— none —</option>${categories.map(c => `<option value="${esc(c.name)}" ${resCategory(r) === c.name ? "selected" : ""}>${esc(c.name)}</option>`).join("")}${resCategory(r) && !categories.some(c => c.name === resCategory(r)) ? `<option value="${esc(resCategory(r))}" selected>${esc(resCategory(r))}</option>` : ""}</select>
+            </div>
+            <div><label>Title</label><input name="title" value="${esc(r.title || "")}" required></div>
+          </div>
+          <label>Link (URL)</label><input name="url" type="url" value="${esc(r.url || "")}" required>
+          <label>Description / note</label><input name="note" value="${esc(r.note || "")}">
+          <div class="row" style="margin-top:8px">
+            <button class="btn sm" type="submit">Save</button>
+            <button class="btn ghost sm" type="button" data-canceleditres="1">Cancel</button>
+          </div>
+        </form>` : `
         <div class="item">
           <h3>${esc(r.title)} <span class="pill local">${esc(resTargetName(resTarget(r)))}</span> <span class="pill ${resScope(r) === "global" ? "global" : "local"}">${resScope(r) === "global" ? "Global" : "Local"}</span>${resCategory(r) ? ` <span class="pill local">${esc(resCategory(r))}</span>` : ""}</h3>
-          <div class="meta">${esc(safeUrl(r.url) || r.url || "")}</div>
-          <button class="btn ghost sm" data-delres="${r.id}" style="margin-top:6px">Remove</button>
+          <div class="meta">${esc(safeUrl(r.url) || r.url || "")}${r.note ? " · " + esc(r.note) : ""}</div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn ghost sm" data-editres="${r.id}">Edit</button>
+            <button class="btn ghost sm" data-delres="${r.id}">Remove</button>
+          </div>
         </div>`).join("") : ""}
     </div>
 
@@ -1270,6 +1296,18 @@ function wire() {
     await notify("Resource added", f.title);
     render();
   };
+  v.querySelectorAll("[data-editres]").forEach(b => b.onclick = () => { editRes = b.dataset.editres; render(); });
+  v.querySelectorAll("[data-canceleditres]").forEach(b => b.onclick = () => { editRes = null; render(); });
+  v.querySelectorAll(".res-edit-form").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(f));
+    if (!safeUrl(d.url)) { alert("Please enter a full link starting with http:// or https://"); return; }
+    await db.update("resources", f.dataset.id, {
+      target: d.target, scope: d.scope, category: (d.category || "").trim(),
+      title: d.title, url: safeUrl(d.url), note: (d.note || "").trim()
+    });
+    editRes = null; render();
+  });
   v.querySelectorAll("[data-delres]").forEach(b => b.onclick = async () => {
     await db.remove("resources", b.dataset.delres);
     render();
