@@ -24,8 +24,19 @@ const RES_KINDS = { listening: "Recommended listening", reading: "Recommended re
 const resLink = r => { const url = safeUrl(r.url); return `<div class="item"><h3>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)}</h3>${r.note ? `<div class="meta">${esc(r.note)}</div>` : ""}</div>`; };
 // Church-level roles see the full member database and every cell/group.
 const seeAllMembers = () => auth.canConfigure(); // admin + pastoral core + senior pastors
+// Who may edit/remove a post (announcement or event): its author, any
+// church-level leader, or the cell leader of a local post's cell.
+function canManagePost(p) {
+  const u = auth.current;
+  if (auth.canConfigure()) return true;
+  if (p.authorId === u.id) return true;
+  if (u.role === "cell_leader" && p.scope === "local" && p.cellId === u.domainCell) return true;
+  return false;
+}
 
 let view = "home";
+let editAnn = null;   // announcement id being edited in the Admin hub
+let editEvent = null; // event id being edited in the Admin hub
 
 // ---------------------------------------------------------------------------
 // AUTH SCREEN
@@ -482,7 +493,11 @@ async function adminView() {
   const pending = (await db.list("testimonies")).filter(t => !t.approved).sort((a, b) => b.createdAt - a.createdAt);
   const resources = (await db.list("resources")).sort((a, b) => b.createdAt - a.createdAt);
   const visits = (await db.list("visits")).filter(x => x.status !== "done").sort((a, b) => b.createdAt - a.createdAt);
+  const announcements = (await db.list("announcements")).sort((a, b) => b.createdAt - a.createdAt).filter(canManagePost);
+  const events = (await db.list("events")).sort((a, b) => evTs(b) - evTs(a)).filter(canManagePost);
   const st = await getSettings();
+  const scopeSel = (val) => `<select name="scope">${auth.canPublishGlobal() ? `<option value="global" ${val === "global" ? "selected" : ""}>Church-wide</option>` : ""}<option value="local" ${val === "local" ? "selected" : ""}>Local (a cell)</option></select>`;
+  const cellSel = (val) => `<select name="cellId">${DOMAIN_CELLS.map(c => `<option value="${c.id}" ${val === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>`;
   const memberOptions = users.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
   const cellOpts = DOMAIN_CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
     .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
@@ -516,6 +531,32 @@ async function adminView() {
     </div>
 
     <div class="card">
+      <h2>✏️ Manage announcements</h2>
+      ${announcements.length ? announcements.map(a => editAnn === a.id ? `
+        <form class="item ann-edit-form" data-id="${a.id}">
+          <label>Title</label><input name="title" value="${esc(a.title)}" required>
+          <label>Message</label><textarea name="body" rows="2" required>${esc(a.body)}</textarea>
+          <div class="row">
+            <div><label>Scope</label>${scopeSel(a.scope)}</div>
+            <div><label>Cell (for local)</label>${cellSel(a.cellId)}</div>
+          </div>
+          <label style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" name="important" ${a.important ? "checked" : ""} style="width:auto"> <span class="hint">Important</span></label>
+          <div class="row" style="margin-top:8px">
+            <button class="btn sm" type="submit">Save</button>
+            <button class="btn ghost sm" type="button" data-canceledit="ann">Cancel</button>
+          </div>
+        </form>` : `
+        <div class="item">
+          <h3>${a.important ? "📌 " : ""}${esc(a.title)} <span class="pill ${a.scope}">${a.scope === "global" ? "Church-wide" : esc(cellName(a.cellId))}</span></h3>
+          <div class="meta">${esc(a.authorName)} · ${fmt(a.createdAt)}</div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn ghost sm" data-editann="${a.id}">Edit</button>
+            <button class="btn ghost sm" data-delann="${a.id}">Remove</button>
+          </div>
+        </div>`).join("") : `<div class="empty">No announcements you can manage.</div>`}
+    </div>
+
+    <div class="card">
       <h2>📅 Add a calendar activity</h2>
       <form id="event-form">
         <label>Title</label><input name="title" required>
@@ -535,6 +576,34 @@ async function adminView() {
         <div style="height:10px"></div>
         <button class="btn" type="submit">Add activity</button>
       </form>
+    </div>
+
+    <div class="card">
+      <h2>✏️ Manage activities</h2>
+      ${events.length ? events.map(e => editEvent === e.id ? `
+        <form class="item event-edit-form" data-id="${e.id}">
+          <label>Title</label><input name="title" value="${esc(e.title)}" required>
+          <div class="row">
+            <div><label>Date</label><input name="date" type="date" value="${esc(e.date)}" required></div>
+            <div><label>Scope</label>${scopeSel(e.scope)}</div>
+          </div>
+          <div class="row">
+            <div><label>Cell (for local)</label>${cellSel(e.cellId)}</div>
+            <div><label>Note</label><input name="note" value="${esc(e.note || "")}"></div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button class="btn sm" type="submit">Save</button>
+            <button class="btn ghost sm" type="button" data-canceledit="event">Cancel</button>
+          </div>
+        </form>` : `
+        <div class="item">
+          <h3>${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
+          <div class="meta">${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}</div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn ghost sm" data-editevent="${e.id}">Edit</button>
+            <button class="btn ghost sm" data-delevent="${e.id}">Remove</button>
+          </div>
+        </div>`).join("") : `<div class="empty">No activities you can manage.</div>`}
     </div>
 
     ${auth.canConfigure() ? `
@@ -701,6 +770,18 @@ function wire() {
     await notify("New announcement", f.title);
     render();
   };
+  // Edit / remove announcements
+  v.querySelectorAll("[data-editann]").forEach(b => b.onclick = () => { editAnn = b.dataset.editann; render(); });
+  v.querySelectorAll("[data-delann]").forEach(b => b.onclick = async () => {
+    if (confirm("Remove this announcement?")) { await db.remove("announcements", b.dataset.delann); render(); }
+  });
+  v.querySelectorAll(".ann-edit-form").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(f));
+    const scope = auth.canPublishGlobal() ? d.scope : "local";
+    await db.update("announcements", f.dataset.id, { title: d.title, body: d.body, scope, cellId: scope === "global" ? null : d.cellId, important: !!d.important });
+    editAnn = null; render();
+  });
 
   // Calendar: add / remove events
   const evForm = $("#event-form");
@@ -718,7 +799,18 @@ function wire() {
     render();
   };
   v.querySelectorAll("[data-delevent]").forEach(b => b.onclick = async () => {
-    await db.remove("events", b.dataset.delevent);
+    if (confirm("Remove this activity?")) { await db.remove("events", b.dataset.delevent); render(); }
+  });
+  v.querySelectorAll("[data-editevent]").forEach(b => b.onclick = () => { editEvent = b.dataset.editevent; render(); });
+  v.querySelectorAll(".event-edit-form").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(f));
+    const scope = auth.canPublishGlobal() ? d.scope : "local";
+    await db.update("events", f.dataset.id, { title: d.title, date: d.date, note: d.note || "", scope, cellId: scope === "global" ? null : d.cellId });
+    editEvent = null; render();
+  });
+  v.querySelectorAll("[data-canceledit]").forEach(b => b.onclick = () => {
+    if (b.dataset.canceledit === "ann") editAnn = null; else editEvent = null;
     render();
   });
 
