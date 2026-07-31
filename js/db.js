@@ -65,34 +65,46 @@ async function supabase() {
   return sb;
 }
 
+// All records live in one generic table `records`
+//   (id text pk, collection text, created_at int8, data jsonb)
+// so any collection works without per-table columns. See SETUP-SUPABASE.md.
+const TABLE = "records";
+const flat = r => r ? ({ ...r.data, id: r.id, createdAt: r.created_at }) : null;
+
 const remote = {
   async list(c) {
     const s = await supabase();
-    const { data, error } = await s.from(c).select("*").order("createdAt", { ascending: true });
+    const { data, error } = await s.from(TABLE).select("id,created_at,data")
+      .eq("collection", c).order("created_at", { ascending: true });
     if (error) throw error;
-    return data || [];
+    return (data || []).map(flat);
   },
   async get(c, id) {
     const s = await supabase();
-    const { data } = await s.from(c).select("*").eq("id", id).maybeSingle();
-    return data || null;
+    const { data } = await s.from(TABLE).select("id,created_at,data")
+      .eq("collection", c).eq("id", id).maybeSingle();
+    return flat(data);
   },
   async insert(c, obj) {
     const s = await supabase();
-    const row = { id: obj.id || uid(), createdAt: obj.createdAt || Date.now(), ...obj };
-    const { data, error } = await s.from(c).insert(row).select().single();
+    const id = obj.id || uid();
+    const createdAt = obj.createdAt || Date.now();
+    const row = { ...obj, id, createdAt };
+    const { error } = await s.from(TABLE).insert({ id, collection: c, created_at: createdAt, data: row });
     if (error) throw error;
-    return data;
+    return row;
   },
   async update(c, id, patch) {
     const s = await supabase();
-    const { data, error } = await s.from(c).update(patch).eq("id", id).select().single();
+    const cur = await this.get(c, id);
+    const merged = { ...(cur || {}), ...patch, id, createdAt: cur ? cur.createdAt : Date.now() };
+    const { error } = await s.from(TABLE).update({ data: merged }).eq("collection", c).eq("id", id);
     if (error) throw error;
-    return data;
+    return merged;
   },
   async remove(c, id) {
     const s = await supabase();
-    await s.from(c).delete().eq("id", id);
+    await s.from(TABLE).delete().eq("collection", c).eq("id", id);
   }
 };
 

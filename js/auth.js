@@ -52,8 +52,9 @@ export const auth = {
     const salt = randomSalt();
     const record = {
       email: form.email.trim(),
-      passwordHash: isSyncEnabled() ? undefined : await hash(form.password, salt),
-      salt: isSyncEnabled() ? undefined : salt,
+      // Salted SHA-256 hash, stored with the record so login works on any device.
+      passwordHash: await hash(form.password, salt),
+      salt,
       role: isFirst ? "administrator" : "member",
       // Registration details
       name: form.name || "",
