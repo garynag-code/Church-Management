@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 import { db } from "./db.js";
 import { auth } from "./auth.js";
-import { DOMAIN_CELLS, ROLES, isSyncEnabled, APP_VERSION, APP_DATE } from "./config.js";
+import { DOMAIN_CELLS, ROLES, isSyncEnabled, APP_VERSION, APP_DATE, APP_URL } from "./config.js";
 import { notify, initNotifications } from "./notifications.js";
 
 const $ = sel => document.querySelector(sel);
@@ -453,6 +453,17 @@ async function moreView() {
   const notifs = (await db.list("notifications")).filter(n => n.userId === u.id || n.userId === "all")
     .sort((a, b) => b.createdAt - a.createdAt).slice(0, 8);
   return `
+    <div class="card">
+      <h2>📲 Invite your church</h2>
+      <p class="sub">Share the app so members can join Ecclesia Glocal Church Family Connect.</p>
+      <div class="row">
+        <button class="btn gold sm" id="share-whatsapp">Share on WhatsApp</button>
+        <button class="btn ghost sm" id="share-native">Share…</button>
+        <button class="btn ghost sm" id="copy-link">Copy link</button>
+      </div>
+      <div class="meta" id="share-status" style="margin-top:8px">${esc(APP_URL)}</div>
+    </div>
+
     <div class="card">
       <h2>Notifications & Reminders</h2>
       <p class="sub">Reminders for meetings, feedback and duties.</p>
@@ -1173,6 +1184,24 @@ function wire() {
     await notify("Member added", `${f.name} ${f.surname} added to the member database.`);
     render();
   };
+  // Invite / share
+  const inviteMsg = `You're invited to join Ecclesia Glocal Church Family Connect 🙏\n\nOur church app for announcements, events, Connect Groups, prayer, testimonies and more.\n\nOpen it here: ${APP_URL}`;
+  const waLink = "https://wa.me/?text=" + encodeURIComponent(inviteMsg);
+  const waBtn = $("#share-whatsapp");
+  if (waBtn) waBtn.onclick = () => window.open(waLink, "_blank", "noopener");
+  const snBtn = $("#share-native");
+  if (snBtn) snBtn.onclick = async () => {
+    if (navigator.share) {
+      try { await navigator.share({ title: "Ecclesia Glocal Church Family Connect", text: inviteMsg, url: APP_URL }); } catch { /* cancelled */ }
+    } else { window.open(waLink, "_blank", "noopener"); }
+  };
+  const cpBtn = $("#copy-link");
+  if (cpBtn) cpBtn.onclick = async () => {
+    const st = $("#share-status");
+    try { await navigator.clipboard.writeText(APP_URL); if (st) st.textContent = "Link copied ✓"; }
+    catch { if (st) st.textContent = APP_URL; }
+  };
+
   const lo = $("#logout");
   if (lo) lo.onclick = () => { auth.logout(); boot(); };
 }
