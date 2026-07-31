@@ -888,6 +888,18 @@ async function adminView() {
         <button class="btn ghost sm" data-export="leaders">Export leaders</button>
         <button class="btn ghost sm" data-export="admins">Export admins</button>
       </div>
+      <div class="row" style="margin-top:8px">
+        <div><label>Export a domain cell</label>
+          <select id="export-cell">${DOMAIN_CELLS.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>
+        </div>
+        <div style="display:flex;align-items:flex-end"><button class="btn ghost sm" id="export-cell-btn" type="button">Export cell</button></div>
+      </div>
+      <div class="row">
+        <div><label>Export a connect group</label>
+          <select id="export-group">${groups.length ? groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join("") : `<option value="">No groups yet</option>`}</select>
+        </div>
+        <div style="display:flex;align-items:flex-end"><button class="btn ghost sm" id="export-group-btn" type="button">Export group</button></div>
+      </div>
       <div class="meta" style="margin-top:10px"><b>Administrators</b></div>
       ${admins.length ? admins.map(x => `<div class="item"><h3>${esc(memberName(x))}</h3><div class="meta">${esc(x.email || "no login")} · ${esc(cellName(x.domainCell))}</div></div>`).join("") : `<div class="empty">None.</div>`}
       <div class="meta" style="margin-top:10px"><b>Leaders</b></div>
@@ -1288,6 +1300,22 @@ function wire() {
     rows = rows.slice().sort((a, b2) => memberName(a).localeCompare(memberName(b2)));
     downloadCsv(`egc-${name}-${todayStr()}.csv`, MEMBER_COLUMNS, rows);
   });
+  const ecBtn = $("#export-cell-btn");
+  if (ecBtn) ecBtn.onclick = async () => {
+    const cid = $("#export-cell").value;
+    const rows = (await db.list("users")).filter(x => x.domainCell === cid).sort((a, b) => memberName(a).localeCompare(memberName(b)));
+    downloadCsv(`egc-cell-${cid}-${todayStr()}.csv`, MEMBER_COLUMNS, rows);
+  };
+  const egBtn = $("#export-group-btn");
+  if (egBtn) egBtn.onclick = async () => {
+    const gid = $("#export-group").value;
+    if (!gid) return;
+    const g = await db.get("connectGroups", gid);
+    const ids = g ? (g.members || []) : [];
+    const rows = (await db.list("users")).filter(x => ids.includes(x.id)).sort((a, b) => memberName(a).localeCompare(memberName(b)));
+    const slug = (g && g.name ? g.name : gid).replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    downloadCsv(`egc-group-${slug}-${todayStr()}.csv`, MEMBER_COLUMNS, rows);
+  };
   const apBtn = $("#addperson-btn");
   if (apBtn) apBtn.onclick = async () => {
     const form = $("#addperson-form");
