@@ -1,6 +1,6 @@
 // Network-first for the app shell so users always get the latest when online;
 // falls back to cache when offline. Free, no backend required.
-const CACHE = "egc-connect-v25";
+const CACHE = "egc-connect-v26";
 const ASSETS = [
   "./",
   "./index.html",
