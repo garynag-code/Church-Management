@@ -42,6 +42,22 @@ const MEMBER_COLUMNS = [
   { label: "Gender", get: x => x.gender }, { label: "School", get: x => x.school },
   { label: "Home address", get: x => x.homeAddress }
 ];
+// Resource targeting: any domain cell, a ministry (kids/youth), or the whole church.
+const resTargetOptions = () => [...DOMAIN_CELLS.map(c => ({ id: c.id, name: c.name })), { id: "kids", name: "EGC Kingdom Image (Kids)" }, { id: "youth", name: "EGC Youth Ministry" }];
+const resTargetName = id => (resTargetOptions().find(x => x.id === id) || {}).name || id;
+const resTarget = r => r.target || (r.kind === "kids" || r.kind === "youth" ? r.kind : "church");
+const resScope = r => r.scope || "global";
+const resCategory = r => r.category || (r.kind && r.kind !== "kids" && r.kind !== "youth" ? r.kind : "");
+// Full resource line: title link + optional topic + global/local classification.
+const resLinkFull = r => {
+  const url = safeUrl(r.url), cat = resCategory(r);
+  return `<div class="item">
+    <h3>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)}
+      ${cat ? `<span class="pill local">${esc(cat)}</span>` : ""}
+      <span class="pill ${resScope(r) === "global" ? "global" : "local"}">${resScope(r) === "global" ? "Global" : "Local"}</span></h3>
+    ${r.note ? `<div class="meta">${esc(r.note)}</div>` : ""}
+  </div>`;
+};
 const resLink = r => { const url = safeUrl(r.url); return `<div class="item"><h3>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)}</h3>${r.note ? `<div class="meta">${esc(r.note)}</div>` : ""}</div>`; };
 const DUTIES = { communion: "Communion", prayer: "Prayer", ushering: "Ushering" };
 const monthLabel = ym => { if (!ym) return ""; const [y, m] = ym.split("-"); return `${MONTHS[(+m) - 1] || ""} ${y}`; };
@@ -552,11 +568,6 @@ async function moreView() {
     <div class="card">
       <h2>About & data</h2>
       <p class="sub">Mode: <b>${db.mode === "sync" ? "Synced (Supabase free tier)" : "Local (this device)"}</b></p>
-      ${db.mode === "sync" ? `
-        <div class="notice">Entered data before syncing? Upload this device's earlier data to the cloud (one-time).</div>
-        <button class="btn gold sm" id="import-local">⬆️ Import on-device data to cloud</button>
-        <div class="meta" id="import-status" style="margin-top:6px"></div>
-        <div style="height:10px"></div>` : ""}
       <div class="meta">Ecclesia Glocal Church Family Connect · v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div>
       <div style="height:10px"></div>
       <button class="btn danger sm" id="logout">Sign out</button>
@@ -567,23 +578,29 @@ async function moreView() {
 // RESOURCES + MINISTRY tabs (display)
 // ---------------------------------------------------------------------------
 async function resourcesView() {
+  const u = auth.current;
   const res = await db.list("resources");
-  const cats = (await db.list("resourceCategories")).map(c => c.name).sort((a, b) => a.localeCompare(b));
   const s = await getSettings();
   const yt = safeUrl(s.youtubeUrl), fb = safeUrl(s.facebookUrl), sermon = safeUrl(s.sermonUrl);
 
-  // Group all non-ministry resources by their category (kind).
-  const general = res.filter(r => r.kind !== "kids" && r.kind !== "youth");
-  const byCat = {};
-  general.forEach(r => { (byCat[r.kind] ||= []).push(r); });
-  // Show defined categories first, then any legacy/other buckets that have items.
-  const sections = [...cats, ...Object.keys(byCat).filter(k => !cats.includes(k))]
-    .filter((v, i, a) => a.indexOf(v) === i);
+  // Non-ministry resources visible to this viewer:
+  //  - global (whole church) or church-targeted: everyone
+  //  - local to a domain: only members of that domain (admins/leadership see all)
+  const visible = res.filter(r => {
+    const t = resTarget(r);
+    if (t === "kids" || t === "youth") return false;
+    if (seeAllMembers()) return true;
+    if (resScope(r) === "global" || t === "church") return true;
+    return t === u.domainCell;
+  });
+  const byT = {};
+  visible.forEach(r => { (byT[resTarget(r)] ||= []).push(r); });
+  const order = DOMAIN_CELLS.map(c => c.id).filter(id => (byT[id] || []).length);
 
   return `
     <div class="card">
       <h2>Resources 📚</h2>
-      <p class="sub">Ecclesia Glocal media, sermons and recommendations by topic.</p>
+      <p class="sub">Ecclesia Glocal media, sermons and recommendations for the church and your domain.</p>
       <div class="row">
         ${yt ? `<a class="btn sm" href="${esc(yt)}" target="_blank" rel="noopener">▶ YouTube channel</a>` : ""}
         ${fb ? `<a class="btn ghost sm" href="${esc(fb)}" target="_blank" rel="noopener">Facebook page</a>` : ""}
@@ -591,16 +608,16 @@ async function resourcesView() {
       ${sermon ? `<div class="item" style="margin-top:8px"><h3>🎬 Latest sermon</h3><a href="${esc(sermon)}" target="_blank" rel="noopener">${esc(s.sermonTitle || "Watch the latest sermon")}</a></div>` : ""}
       ${!yt && !fb && !sermon ? `<div class="empty">Links will appear here once an admin adds them.</div>` : ""}
     </div>
-    ${sections.some(c => (byCat[c] || []).length) ? sections.filter(c => (byCat[c] || []).length).map(c => `
+    ${order.length ? order.map(t => `
       <div class="card">
-        <h2>${esc(RES_KINDS[c] || c)}</h2>
-        ${byCat[c].sort((a, b) => b.createdAt - a.createdAt).map(resLink).join("")}
+        <h2>${esc(cellName(t))}${t === "church" ? " (church-wide)" : ""}</h2>
+        ${byT[t].sort((a, b) => b.createdAt - a.createdAt).map(resLinkFull).join("")}
       </div>`).join("")
-      : `<div class="card"><div class="empty">No topic resources yet. An admin can add categories and links.</div></div>`}`;
+      : `<div class="card"><div class="empty">No resources for you yet.</div></div>`}`;
 }
 
 async function kidsView() {
-  const res = (await db.list("resources")).filter(r => r.kind === "kids").sort((a, b) => b.createdAt - a.createdAt);
+  const res = (await db.list("resources")).filter(r => resTarget(r) === "kids").sort((a, b) => b.createdAt - a.createdAt);
   return `
     <div class="card">
       <h2>EGC Kingdom Image 🧒</h2>
@@ -608,12 +625,12 @@ async function kidsView() {
     </div>
     <div class="card">
       <h2>Resources</h2>
-      ${res.length ? res.map(resLink).join("") : `<div class="empty">Resources coming soon.</div>`}
+      ${res.length ? res.map(resLinkFull).join("") : `<div class="empty">Resources coming soon.</div>`}
     </div>`;
 }
 
 async function youthView() {
-  const res = (await db.list("resources")).filter(r => r.kind === "youth").sort((a, b) => b.createdAt - a.createdAt);
+  const res = (await db.list("resources")).filter(r => resTarget(r) === "youth").sort((a, b) => b.createdAt - a.createdAt);
   return `
     <div class="card">
       <h2>EGC Youth Ministry 🔥</h2>
@@ -621,7 +638,7 @@ async function youthView() {
     </div>
     <div class="card">
       <h2>Resources</h2>
-      ${res.length ? res.map(resLink).join("") : `<div class="empty">Resources coming soon.</div>`}
+      ${res.length ? res.map(resLinkFull).join("") : `<div class="empty">Resources coming soon.</div>`}
     </div>`;
 }
 
@@ -893,10 +910,22 @@ async function adminView() {
       ${categories.length ? `<div class="meta" style="margin:6px 0 12px">${categories.map(c => `${esc(c.name)} <a href="#" data-delcat="${c.id}" title="remove category" style="color:var(--danger);text-decoration:none">✕</a>`).join(" · ")}</div>` : `<div class="meta" style="margin:6px 0 12px">No categories yet — add a few above.</div>`}
       <form id="resource-form">
         <div class="row">
-          <div><label>Category</label>
-            <select name="kind">
-              <option value="kids">EGC Kingdom Image (Kids)</option>
-              <option value="youth">EGC Youth Ministry</option>
+          <div><label>For (domain / ministry)</label>
+            <select name="target">
+              ${resTargetOptions().map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}
+            </select>
+          </div>
+          <div><label>Classification</label>
+            <select name="scope">
+              <option value="global">Global (whole church)</option>
+              <option value="local">Local (that domain/ministry only)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div><label>Topic (optional)</label>
+            <select name="category">
+              <option value="">— none —</option>
               ${categories.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("")}
             </select>
           </div>
@@ -909,7 +938,7 @@ async function adminView() {
       </form>
       ${resources.length ? resources.map(r => `
         <div class="item">
-          <h3>${esc(r.title)} <span class="pill local">${esc(RES_KINDS[r.kind] || r.kind)}</span></h3>
+          <h3>${esc(r.title)} <span class="pill local">${esc(resTargetName(resTarget(r)))}</span> <span class="pill ${resScope(r) === "global" ? "global" : "local"}">${resScope(r) === "global" ? "Global" : "Local"}</span>${resCategory(r) ? ` <span class="pill local">${esc(resCategory(r))}</span>` : ""}</h3>
           <div class="meta">${esc(safeUrl(r.url) || r.url || "")}</div>
           <button class="btn ghost sm" data-delres="${r.id}" style="margin-top:6px">Remove</button>
         </div>`).join("") : ""}
@@ -1213,7 +1242,10 @@ function wire() {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
     if (!safeUrl(f.url)) { alert("Please enter a full link starting with http:// or https://"); return; }
-    await db.insert("resources", { kind: f.kind, title: f.title, url: safeUrl(f.url), note: (f.note || "").trim() });
+    await db.insert("resources", {
+      target: f.target || "church", scope: f.scope || "global", category: (f.category || "").trim(),
+      title: f.title, url: safeUrl(f.url), note: (f.note || "").trim()
+    });
     await notify("Resource added", f.title);
     render();
   };
@@ -1398,55 +1430,12 @@ function wire() {
       st.textContent = "On iPhone use Safari's Share → Add to Home Screen. On other browsers, use the steps below.";
     }
   };
-  const imp = $("#import-local");
-  if (imp) imp.onclick = async () => {
-    const st = $("#import-status");
-    if (!confirm("Upload this device's earlier data to the shared cloud? Existing cloud records are kept; only missing ones are added.")) return;
-    imp.disabled = true; if (st) st.textContent = "Uploading…";
-    try {
-      const { imported } = await importLocalData();
-      if (st) st.textContent = `Imported ${imported} record(s). Reloading…`;
-      await notify("Import complete", `${imported} record(s) uploaded.`);
-      setTimeout(() => boot(), 600);
-    } catch (e) {
-      imp.disabled = false;
-      if (st) st.textContent = "Import failed: " + (e && e.message ? e.message : "error");
-    }
-  };
   const lo = $("#logout");
   if (lo) lo.onclick = async () => { await auth.logout(); boot(); };
 }
 
 // ---------------------------------------------------------------------------
 // BOOT
-// ---------------------------------------------------------------------------
-// One-time migration: upload data entered in LOCAL mode (still in this device's
-// browser storage) into the cloud, preserving ids so all references stay intact.
-async function importLocalData() {
-  if (db.mode !== "sync" || !auth.current) return { imported: 0 };
-  const cur = auth.current;
-  const readLocal = c => { try { return JSON.parse(localStorage.getItem("church.v1." + c) || "[]"); } catch { return []; } };
-  let imported = 0;
-
-  // Users first — adopt the on-device admin profile for the current email so
-  // the current session keeps that profile's id and all its references.
-  const localUsers = readLocal("users");
-  const oldSelf = localUsers.find(u => (u.email || "").toLowerCase() === (cur.email || "").toLowerCase());
-  if (oldSelf && oldSelf.id !== cur.id) { try { await db.remove("users", cur.id); } catch { /* ignore */ } }
-  for (const u of localUsers) {
-    if (!(await db.get("users", u.id))) { await db.insert("users", u); imported++; }
-  }
-  // Everything else, preserving ids.
-  for (const c of db.collections) {
-    if (c === "users") continue;
-    for (const r of readLocal(c)) {
-      if (r && r.id && !(await db.get(c, r.id))) { await db.insert(c, r); imported++; }
-    }
-  }
-  await auth.init(); // re-link session to the adopted profile by email
-  return { imported };
-}
-
 async function boot() {
   await auth.init();
   if (auth.current) { view = "home"; render(); }
