@@ -511,14 +511,22 @@ async function moreView() {
 // ---------------------------------------------------------------------------
 async function resourcesView() {
   const res = await db.list("resources");
+  const cats = (await db.list("resourceCategories")).map(c => c.name).sort((a, b) => a.localeCompare(b));
   const s = await getSettings();
-  const listening = res.filter(r => r.kind === "listening").sort((a, b) => b.createdAt - a.createdAt);
-  const reading = res.filter(r => r.kind === "reading").sort((a, b) => b.createdAt - a.createdAt);
   const yt = safeUrl(s.youtubeUrl), fb = safeUrl(s.facebookUrl), sermon = safeUrl(s.sermonUrl);
+
+  // Group all non-ministry resources by their category (kind).
+  const general = res.filter(r => r.kind !== "kids" && r.kind !== "youth");
+  const byCat = {};
+  general.forEach(r => { (byCat[r.kind] ||= []).push(r); });
+  // Show defined categories first, then any legacy/other buckets that have items.
+  const sections = [...cats, ...Object.keys(byCat).filter(k => !cats.includes(k))]
+    .filter((v, i, a) => a.indexOf(v) === i);
+
   return `
     <div class="card">
       <h2>Resources 📚</h2>
-      <p class="sub">Ecclesia Glocal media, sermons and recommendations.</p>
+      <p class="sub">Ecclesia Glocal media, sermons and recommendations by topic.</p>
       <div class="row">
         ${yt ? `<a class="btn sm" href="${esc(yt)}" target="_blank" rel="noopener">▶ YouTube channel</a>` : ""}
         ${fb ? `<a class="btn ghost sm" href="${esc(fb)}" target="_blank" rel="noopener">Facebook page</a>` : ""}
@@ -526,14 +534,12 @@ async function resourcesView() {
       ${sermon ? `<div class="item" style="margin-top:8px"><h3>🎬 Latest sermon</h3><a href="${esc(sermon)}" target="_blank" rel="noopener">${esc(s.sermonTitle || "Watch the latest sermon")}</a></div>` : ""}
       ${!yt && !fb && !sermon ? `<div class="empty">Links will appear here once an admin adds them.</div>` : ""}
     </div>
-    <div class="card">
-      <h2>🎧 Recommended listening</h2>
-      ${listening.length ? listening.map(resLink).join("") : `<div class="empty">Nothing here yet.</div>`}
-    </div>
-    <div class="card">
-      <h2>📖 Recommended reading</h2>
-      ${reading.length ? reading.map(resLink).join("") : `<div class="empty">Nothing here yet.</div>`}
-    </div>`;
+    ${sections.some(c => (byCat[c] || []).length) ? sections.filter(c => (byCat[c] || []).length).map(c => `
+      <div class="card">
+        <h2>${esc(RES_KINDS[c] || c)}</h2>
+        ${byCat[c].sort((a, b) => b.createdAt - a.createdAt).map(resLink).join("")}
+      </div>`).join("")
+      : `<div class="card"><div class="empty">No topic resources yet. An admin can add categories and links.</div></div>`}`;
 }
 
 async function kidsView() {
@@ -578,6 +584,7 @@ async function adminView() {
   const events = (await db.list("events")).sort((a, b) => evTs(b) - evTs(a)).filter(canManagePost);
   const roster = (await db.list("roster")).filter(r => r.month >= thisMonth());
   const preaching = (await db.list("preaching")).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const categories = (await db.list("resourceCategories")).sort((a, b) => a.name.localeCompare(b.name));
   const st = await getSettings();
   const scopeSel = (val) => `<select name="scope">${auth.canPublishGlobal() ? `<option value="global" ${val === "global" ? "selected" : ""}>Church-wide</option>` : ""}<option value="local" ${val === "local" ? "selected" : ""}>Local (a cell)</option></select>`;
   const cellSel = (val) => `<select name="cellId">${DOMAIN_CELLS.map(c => `<option value="${c.id}" ${val === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>`;
@@ -818,11 +825,19 @@ async function adminView() {
 
     <div class="card">
       <h2>📚 Resources & ministry links</h2>
+      <label>Resource categories (e.g. Marriage, Finance, Parenting, Work, Business, Relationships)</label>
+      <form id="category-form" class="row">
+        <input name="name" placeholder="New category name" required>
+        <button class="btn sm" type="submit">Add category</button>
+      </form>
+      ${categories.length ? `<div class="meta" style="margin:6px 0 12px">${categories.map(c => `${esc(c.name)} <a href="#" data-delcat="${c.id}" title="remove category" style="color:var(--danger);text-decoration:none">✕</a>`).join(" · ")}</div>` : `<div class="meta" style="margin:6px 0 12px">No categories yet — add a few above.</div>`}
       <form id="resource-form">
         <div class="row">
           <div><label>Category</label>
             <select name="kind">
-              ${Object.entries(RES_KINDS).map(([k, label]) => `<option value="${k}">${esc(label)}</option>`).join("")}
+              <option value="kids">EGC Kingdom Image (Kids)</option>
+              <option value="youth">EGC Youth Ministry</option>
+              ${categories.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("")}
             </select>
           </div>
           <div><label>Title</label><input name="title" required></div>
@@ -1092,6 +1107,21 @@ function wire() {
     await notify("Links saved", "Church links updated.");
     render();
   };
+  const catForm = $("#category-form");
+  if (catForm) catForm.onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    const name = (f.name || "").trim();
+    if (!name) return;
+    const existing = await db.list("resourceCategories");
+    if (!existing.some(c => c.name.toLowerCase() === name.toLowerCase())) await db.insert("resourceCategories", { name });
+    render();
+  };
+  v.querySelectorAll("[data-delcat]").forEach(b => b.onclick = async e => {
+    e.preventDefault();
+    await db.remove("resourceCategories", b.dataset.delcat);
+    render();
+  });
   const resForm = $("#resource-form");
   if (resForm) resForm.onsubmit = async e => {
     e.preventDefault();
