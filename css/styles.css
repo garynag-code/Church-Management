@@ -134,3 +134,18 @@ small.hint { color: var(--muted); font-size: 12px; }
 .cal-ev.global { background: var(--gold-600); }
 .cal-ev.local { background: var(--indigo-300); }
 .cal-more { font-size: 9px; color: var(--muted); margin-top: 1px; }
+
+/* Seamless-update toast (non-blocking, above the nav) */
+.update-toast {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: 74px; z-index: 40; max-width: 92%;
+  display: flex; align-items: center; gap: 10px;
+  background: var(--indigo); color: #fff;
+  padding: 10px 12px; border-radius: 12px; box-shadow: var(--shadow);
+  font-size: 13px;
+}
+.update-toast button {
+  border: none; border-radius: 8px; padding: 6px 10px; font-weight: 700; cursor: pointer;
+}
+.update-toast #update-refresh { background: var(--gold); color: #3a2b00; }
+.update-toast #update-dismiss { background: transparent; color: #fff; padding: 6px 8px; }

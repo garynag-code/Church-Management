@@ -1251,7 +1251,41 @@ async function boot() {
   else authScreen();
 }
 
+// ---------------------------------------------------------------------------
+// SEAMLESS BACKGROUND UPDATES
+// New code downloads in the background and is applied on the next natural
+// reopen — never mid-action, and never touching data or the signed-in session
+// (data lives in Supabase / local storage, not in the cached code).
+// ---------------------------------------------------------------------------
+function showUpdateToast() {
+  if (document.getElementById("update-toast")) return;
+  const bar = document.createElement("div");
+  bar.id = "update-toast";
+  bar.className = "update-toast";
+  bar.innerHTML = `<span>A new version is ready.</span>
+    <button id="update-refresh">Refresh</button>
+    <button id="update-dismiss" aria-label="dismiss">✕</button>`;
+  document.body.appendChild(bar);
+  // Applying is just a reload — it keeps you signed in and loses no data.
+  bar.querySelector("#update-refresh").onclick = () => location.reload();
+  bar.querySelector("#update-dismiss").onclick = () => bar.remove();
+}
+
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+  navigator.serviceWorker.register("./service-worker.js").then(reg => {
+    const check = () => { try { reg.update(); } catch { /* ignore */ } };
+    check();                                   // check on load
+    setInterval(check, 30 * 60 * 1000);        // and every 30 min in the background
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
+    // When a new version has downloaded and we're already running an old one,
+    // offer a gentle, dismissible refresh — we never force it.
+    reg.addEventListener("updatefound", () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener("statechange", () => {
+        if (nw.state === "installed" && navigator.serviceWorker.controller) showUpdateToast();
+      });
+    });
+  }).catch(() => {});
 }
 boot();
