@@ -55,6 +55,35 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px
   padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; margin-top: 2px;
 }
 
+/* Notifications bell */
+.bell {
+  position: relative; background: rgba(255,255,255,.15); border: none; color: #fff;
+  width: 38px; height: 38px; border-radius: 50%; font-size: 18px; flex: 0 0 auto; margin-left: 6px;
+  display: flex; align-items: center; justify-content: center;
+}
+.bell-badge {
+  position: absolute; top: -3px; right: -3px; background: var(--danger); color: #fff;
+  font-size: 10px; font-weight: 800; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 999px; display: flex; align-items: center; justify-content: center;
+  border: 2px solid var(--indigo);
+}
+.notif-panel {
+  position: fixed; top: 60px; right: 8px; z-index: 30; width: min(360px, 94vw);
+  max-height: 70vh; overflow-y: auto; background: var(--card); color: var(--text);
+  border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+}
+.notif-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card); }
+.notif-head #notif-clear { color: var(--indigo-300); cursor: pointer; }
+.notif-item {
+  display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left;
+  background: none; border: none; border-bottom: 1px solid var(--line); padding: 12px 14px; color: var(--text);
+}
+.notif-item:hover { background: var(--bg); }
+.ni-ico { font-size: 18px; flex: 0 0 auto; }
+.ni-body { display: flex; flex-direction: column; min-width: 0; }
+.ni-text { font-size: 14px; }
+.notif-panel .empty { padding: 20px; }
+
 .view { padding: 16px; }
 .card {
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
