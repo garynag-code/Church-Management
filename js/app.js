@@ -531,6 +531,11 @@ async function moreView() {
     <div class="card">
       <h2>About & data</h2>
       <p class="sub">Mode: <b>${db.mode === "sync" ? "Synced (Supabase free tier)" : "Local (this device)"}</b></p>
+      ${db.mode === "sync" ? `
+        <div class="notice">Entered data before syncing? Upload this device's earlier data to the cloud (one-time).</div>
+        <button class="btn gold sm" id="import-local">⬆️ Import on-device data to cloud</button>
+        <div class="meta" id="import-status" style="margin-top:6px"></div>
+        <div style="height:10px"></div>` : ""}
       <div class="meta">Ecclesia Glocal Church Family Connect · v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div>
       <div style="height:10px"></div>
       <button class="btn danger sm" id="logout">Sign out</button>
@@ -1356,6 +1361,21 @@ function wire() {
     catch { if (st) st.textContent = APP_URL; }
   };
 
+  const imp = $("#import-local");
+  if (imp) imp.onclick = async () => {
+    const st = $("#import-status");
+    if (!confirm("Upload this device's earlier data to the shared cloud? Existing cloud records are kept; only missing ones are added.")) return;
+    imp.disabled = true; if (st) st.textContent = "Uploading…";
+    try {
+      const { imported } = await importLocalData();
+      if (st) st.textContent = `Imported ${imported} record(s). Reloading…`;
+      await notify("Import complete", `${imported} record(s) uploaded.`);
+      setTimeout(() => boot(), 600);
+    } catch (e) {
+      imp.disabled = false;
+      if (st) st.textContent = "Import failed: " + (e && e.message ? e.message : "error");
+    }
+  };
   const lo = $("#logout");
   if (lo) lo.onclick = async () => { await auth.logout(); boot(); };
 }
@@ -1363,6 +1383,33 @@ function wire() {
 // ---------------------------------------------------------------------------
 // BOOT
 // ---------------------------------------------------------------------------
+// One-time migration: upload data entered in LOCAL mode (still in this device's
+// browser storage) into the cloud, preserving ids so all references stay intact.
+async function importLocalData() {
+  if (db.mode !== "sync" || !auth.current) return { imported: 0 };
+  const cur = auth.current;
+  const readLocal = c => { try { return JSON.parse(localStorage.getItem("church.v1." + c) || "[]"); } catch { return []; } };
+  let imported = 0;
+
+  // Users first — adopt the on-device admin profile for the current email so
+  // the current session keeps that profile's id and all its references.
+  const localUsers = readLocal("users");
+  const oldSelf = localUsers.find(u => (u.email || "").toLowerCase() === (cur.email || "").toLowerCase());
+  if (oldSelf && oldSelf.id !== cur.id) { try { await db.remove("users", cur.id); } catch { /* ignore */ } }
+  for (const u of localUsers) {
+    if (!(await db.get("users", u.id))) { await db.insert("users", u); imported++; }
+  }
+  // Everything else, preserving ids.
+  for (const c of db.collections) {
+    if (c === "users") continue;
+    for (const r of readLocal(c)) {
+      if (r && r.id && !(await db.get(c, r.id))) { await db.insert(c, r); imported++; }
+    }
+  }
+  await auth.init(); // re-link session to the adopted profile by email
+  return { imported };
+}
+
 async function boot() {
   await auth.init();
   if (auth.current) { view = "home"; render(); }
