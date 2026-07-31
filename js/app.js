@@ -21,6 +21,27 @@ const safeUrl = u => { const s = String(u || "").trim(); return /^https?:\/\//i.
 async function getSettings() { const s = await db.list("settings"); return s[0] || {}; }
 async function saveSettings(patch) { const s = await db.list("settings"); return s[0] ? db.update("settings", s[0].id, patch) : db.insert("settings", patch); }
 const RES_KINDS = { listening: "Recommended listening", reading: "Recommended reading", kids: "EGC Kingdom Image (Kids)", youth: "EGC Youth Ministry" };
+// Build a CSV (Excel-friendly, UTF-8 BOM) and trigger a download in the browser.
+function downloadCsv(filename, columns, rows) {
+  const cell = v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+  const lines = [columns.map(c => cell(c.label)).join(",")];
+  rows.forEach(r => lines.push(columns.map(c => cell(c.get(r))).join(",")));
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+const MEMBER_COLUMNS = [
+  { label: "Name", get: x => x.name }, { label: "Surname", get: x => x.surname },
+  { label: "Role", get: x => roleName(x.role) }, { label: "Domain cell", get: x => cellName(x.domainCell) },
+  { label: "Email", get: x => x.email }, { label: "Cell number", get: x => x.cellNumber },
+  { label: "Family group", get: x => x.familyGroup }, { label: "Occupation", get: x => x.occupation },
+  { label: "Company", get: x => x.company }, { label: "Age", get: x => x.age },
+  { label: "Gender", get: x => x.gender }, { label: "School", get: x => x.school },
+  { label: "Home address", get: x => x.homeAddress }
+];
 const resLink = r => { const url = safeUrl(r.url); return `<div class="item"><h3>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)}</h3>${r.note ? `<div class="meta">${esc(r.note)}</div>` : ""}</div>`; };
 const DUTIES = { communion: "Communion", prayer: "Prayer", ushering: "Ushering" };
 const monthLabel = ym => { if (!ym) return ""; const [y, m] = ym.split("-"); return `${MONTHS[(+m) - 1] || ""} ${y}`; };
@@ -586,6 +607,9 @@ async function adminView() {
   const preaching = (await db.list("preaching")).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const categories = (await db.list("resourceCategories")).sort((a, b) => a.name.localeCompare(b.name));
   const st = await getSettings();
+  const admins = users.filter(x => x.role === "administrator");
+  const groupLeaderIds = new Set(groups.map(g => g.leaderId).filter(Boolean));
+  const leaderMembers = users.filter(x => ["pastoral_core", "senior_pastor", "cell_leader"].includes(x.role) || groupLeaderIds.has(x.id));
   const scopeSel = (val) => `<select name="scope">${auth.canPublishGlobal() ? `<option value="global" ${val === "global" ? "selected" : ""}>Church-wide</option>` : ""}<option value="local" ${val === "local" ? "selected" : ""}>Local (a cell)</option></select>`;
   const cellSel = (val) => `<select name="cellId">${DOMAIN_CELLS.map(c => `<option value="${c.id}" ${val === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>`;
   const memberOptions = users.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
@@ -856,6 +880,20 @@ async function adminView() {
     </div>
 
     ${auth.isAdmin() ? `
+    <div class="card">
+      <h2>🗂️ Directory & export <span class="pill role">Admin</span></h2>
+      <p class="sub">${users.length} members · ${admins.length} administrators · ${leaderMembers.length} leaders. Export opens in Excel.</p>
+      <div class="row">
+        <button class="btn sm" data-export="all">Export members (CSV)</button>
+        <button class="btn ghost sm" data-export="leaders">Export leaders</button>
+        <button class="btn ghost sm" data-export="admins">Export admins</button>
+      </div>
+      <div class="meta" style="margin-top:10px"><b>Administrators</b></div>
+      ${admins.length ? admins.map(x => `<div class="item"><h3>${esc(memberName(x))}</h3><div class="meta">${esc(x.email || "no login")} · ${esc(cellName(x.domainCell))}</div></div>`).join("") : `<div class="empty">None.</div>`}
+      <div class="meta" style="margin-top:10px"><b>Leaders</b></div>
+      ${leaderMembers.length ? leaderMembers.map(x => `<div class="item"><h3>${esc(memberName(x))} <span class="pill role">${esc(roleName(x.role))}</span></h3><div class="meta">${esc(x.email || "")} · ${esc(cellName(x.domainCell))}</div></div>`).join("") : `<div class="empty">None yet.</div>`}
+    </div>
+
     <div class="card">
       <h2>👥 Member database <span class="pill role">Admin</span></h2>
       <p class="sub">${users.length} member(s). Add people and manage roles.</p>
@@ -1238,6 +1276,18 @@ function wire() {
     await notify("Profile updated", "Your details were saved.");
     render();
   };
+  // Directory CSV export
+  v.querySelectorAll("[data-export]").forEach(b => b.onclick = async () => {
+    const all = await db.list("users");
+    const groups = await db.list("connectGroups");
+    const groupLeaderIds = new Set(groups.map(g => g.leaderId).filter(Boolean));
+    const kind = b.dataset.export;
+    let rows = all, name = "members";
+    if (kind === "admins") { rows = all.filter(x => x.role === "administrator"); name = "administrators"; }
+    else if (kind === "leaders") { rows = all.filter(x => ["pastoral_core", "senior_pastor", "cell_leader"].includes(x.role) || groupLeaderIds.has(x.id)); name = "leaders"; }
+    rows = rows.slice().sort((a, b2) => memberName(a).localeCompare(memberName(b2)));
+    downloadCsv(`egc-${name}-${todayStr()}.csv`, MEMBER_COLUMNS, rows);
+  });
   const apBtn = $("#addperson-btn");
   if (apBtn) apBtn.onclick = async () => {
     const form = $("#addperson-form");
