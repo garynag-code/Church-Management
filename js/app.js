@@ -77,6 +77,7 @@ function canManagePost(p) {
 }
 
 let view = "home";
+let deferredInstall = null; // captured beforeinstallprompt event (Android/Chrome)
 let editAnn = null;   // announcement id being edited in the Admin hub
 let editEvent = null; // event id being edited in the Admin hub
 
@@ -531,6 +532,8 @@ async function moreView() {
     <div class="card">
       <h2>📲 Add to Home Screen</h2>
       <p class="sub">Install the app for a full-screen, native feel and quick access.</p>
+      <button class="btn gold sm" id="install-app">Add to Home Screen</button>
+      <div class="meta" id="install-status" style="margin:6px 0 4px"></div>
       <div class="item">
         <h3>iPhone / iPad (Safari)</h3>
         <div class="meta">Tap <b>Share</b> (the box with an ↑) → scroll down → <b>Add to Home Screen</b> → <b>Add</b>.</div>
@@ -1379,6 +1382,22 @@ function wire() {
     catch { if (st) st.textContent = APP_URL; }
   };
 
+  const installBtn = $("#install-app");
+  if (installBtn) installBtn.onclick = async () => {
+    const st = $("#install-status");
+    if (window.matchMedia("(display-mode: standalone)").matches || navigator.standalone) {
+      if (st) st.textContent = "✓ Already installed — open it from your home screen.";
+      return;
+    }
+    if (deferredInstall) {
+      deferredInstall.prompt();
+      const { outcome } = await deferredInstall.userChoice;
+      deferredInstall = null;
+      if (st) st.textContent = outcome === "accepted" ? "✓ Installing… check your home screen." : "No problem — you can install any time.";
+    } else if (st) {
+      st.textContent = "On iPhone use Safari's Share → Add to Home Screen. On other browsers, use the steps below.";
+    }
+  };
   const imp = $("#import-local");
   if (imp) imp.onclick = async () => {
     const st = $("#import-status");
@@ -1453,6 +1472,10 @@ function showUpdateToast() {
   bar.querySelector("#update-refresh").onclick = () => location.reload();
   bar.querySelector("#update-dismiss").onclick = () => bar.remove();
 }
+
+// Capture the install prompt (Android/Chrome/Edge) so a button can trigger it.
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); deferredInstall = e; });
+window.addEventListener("appinstalled", () => { deferredInstall = null; });
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./service-worker.js").then(reg => {
