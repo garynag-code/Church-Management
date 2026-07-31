@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 import { db } from "./db.js";
 import { auth } from "./auth.js";
-import { DOMAIN_CELLS, ROLES, isSyncEnabled } from "./config.js";
+import { DOMAIN_CELLS, ROLES, isSyncEnabled, APP_VERSION, APP_DATE } from "./config.js";
 import { notify, initNotifications } from "./notifications.js";
 
 const $ = sel => document.querySelector(sel);
@@ -17,6 +17,11 @@ const MONTHS = ["January","February","March","April","May","June","July","August
 const evTs = d => new Date(d + "T00:00:00").getTime();
 const dayFmt = d => new Date(d + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
 const todayStr = () => { const n = new Date(); return new Date(n.getTime() - n.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+const safeUrl = u => { const s = String(u || "").trim(); return /^https?:\/\//i.test(s) ? s : ""; };
+async function getSettings() { const s = await db.list("settings"); return s[0] || {}; }
+async function saveSettings(patch) { const s = await db.list("settings"); return s[0] ? db.update("settings", s[0].id, patch) : db.insert("settings", patch); }
+const RES_KINDS = { listening: "Recommended listening", reading: "Recommended reading", kids: "EGC Kingdom Image (Kids)", youth: "EGC Youth Ministry" };
+const resLink = r => { const url = safeUrl(r.url); return `<div class="item"><h3>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)}</h3>${r.note ? `<div class="meta">${esc(r.note)}</div>` : ""}</div>`; };
 // Church-level roles see the full member database and every cell/group.
 const seeAllMembers = () => auth.canConfigure(); // admin + pastoral core + senior pastors
 
@@ -33,6 +38,7 @@ function authScreen() {
         <img src="./icons/logo.jpg" alt="Ecclesia Glocal Church" style="width:280px;max-width:82%;height:auto">
         <h1 style="font-size:18px;margin:8px 0 2px">Family Connect</h1>
         <small class="hint">${isSyncEnabled() ? "Synced across your church" : "Running free · local mode"}</small>
+        <div class="hint" style="margin-top:4px">v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div>
       </div>
       <div class="tabs">
         <button id="tab-login" class="active">Sign in</button>
@@ -104,6 +110,7 @@ function shell(inner) {
   const navItems = [
     ["home", "🏠", "Home"], ["upcoming", "📅", "Upcoming"], ["cells", "🌐", "Cells"],
     ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "My Testimony"],
+    ["resources", "📚", "Resources"], ["kids", "🧒", "EGC Kids"], ["youth", "🔥", "EGC Youth"],
     ...(auth.canLeadCell() ? [["admin", "🛠️", "Admin"]] : []),
     ["more", "⚙️", "More"]
   ];
@@ -114,7 +121,7 @@ function shell(inner) {
       <div class="who">${esc(u.name)} ${esc(u.surname)}<br><span class="badge">${esc(roleName(u.role))}</span></div>
     </div>
     <div class="app"><div class="view" id="view">${inner}</div></div>
-    <nav class="nav" style="grid-template-columns:repeat(${navItems.length},1fr)">
+    <nav class="nav">
       ${navItems.map(([id, ico, label]) =>
         `<button data-nav="${id}" class="${view === id ? "active" : ""}"><span class="ico">${ico}</span>${label}</button>`).join("")}
     </nav>`;
@@ -165,6 +172,16 @@ async function homeView() {
           <h3>${esc(e.title)} <span class="pill ${e.scope}">${e.scope === "global" ? "Church-wide" : esc(cellName(e.cellId))}</span></h3>
           <div class="meta">📅 ${dayFmt(e.date)}${e.note ? " · " + esc(e.note) : ""}</div>
         </div>`).join("") : `<div class="empty">Nothing scheduled this week.</div>`}
+    </div>
+
+    <div class="card">
+      <h2>🙋 Request a visit</h2>
+      <p class="sub">Ask for a pastoral visit — it goes to your Connect Group leader and the church admins.</p>
+      <form id="visit-form">
+        <textarea name="note" rows="2" placeholder="Anything we should know? (optional)"></textarea>
+        <div style="height:8px"></div>
+        <button class="btn gold" type="submit">Request a visit</button>
+      </form>
     </div>
 
     <div class="card">
@@ -252,6 +269,7 @@ async function groupsView() {
   const u = auth.current;
   const groups = (await db.list("connectGroups")).sort((a, b) => b.createdAt - a.createdAt);
   const users = await db.list("users");
+  const visits = (await db.list("visits")).filter(x => x.status !== "done");
   return `
     <div class="card">
       <h2>Connect Groups</h2>
@@ -262,10 +280,19 @@ async function groupsView() {
       const memberIds = g.members || [];
       const gMembers = users.filter(x => memberIds.includes(x.id));
       const canViewGroup = isLeader || memberIds.includes(u.id);
+      const gVisits = visits.filter(x => (x.groupIds || []).includes(g.id));
       return `
       <div class="card">
         <h2>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h2>
         <p class="sub">Leader: ${esc(g.leaderName)} · ${memberIds.length} member(s)</p>
+        ${isLeader && gVisits.length ? `
+          <div class="meta" style="margin-top:6px"><b>🙋 Visit requests</b></div>
+          ${gVisits.map(x => `
+            <div class="item">
+              <h3>${esc(x.requesterName)}</h3>
+              <div class="meta">${esc(x.contact || "")}${x.note ? " · " + esc(x.note) : ""} · ${fmt(x.createdAt)}</div>
+              <button class="btn ghost sm" data-visitdone="${x.id}" style="margin-top:6px">Mark done</button>
+            </div>`).join("")}` : ""}
         ${canViewGroup ? `
           <div style="margin-top:6px" class="meta"><b>Contacts in this group</b></div>
           ${gMembers.length ? gMembers.map(m => `
@@ -382,7 +409,65 @@ async function moreView() {
     <div class="card">
       <h2>About & data</h2>
       <p class="sub">Mode: <b>${db.mode === "sync" ? "Synced (Supabase free tier)" : "Local (this device)"}</b></p>
+      <div class="meta">Ecclesia Glocal Church Family Connect · v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div>
+      <div style="height:10px"></div>
       <button class="btn danger sm" id="logout">Sign out</button>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// RESOURCES + MINISTRY tabs (display)
+// ---------------------------------------------------------------------------
+async function resourcesView() {
+  const res = await db.list("resources");
+  const s = await getSettings();
+  const listening = res.filter(r => r.kind === "listening").sort((a, b) => b.createdAt - a.createdAt);
+  const reading = res.filter(r => r.kind === "reading").sort((a, b) => b.createdAt - a.createdAt);
+  const yt = safeUrl(s.youtubeUrl), fb = safeUrl(s.facebookUrl), sermon = safeUrl(s.sermonUrl);
+  return `
+    <div class="card">
+      <h2>Resources 📚</h2>
+      <p class="sub">Ecclesia Glocal media, sermons and recommendations.</p>
+      <div class="row">
+        ${yt ? `<a class="btn sm" href="${esc(yt)}" target="_blank" rel="noopener">▶ YouTube channel</a>` : ""}
+        ${fb ? `<a class="btn ghost sm" href="${esc(fb)}" target="_blank" rel="noopener">Facebook page</a>` : ""}
+      </div>
+      ${sermon ? `<div class="item" style="margin-top:8px"><h3>🎬 Latest sermon</h3><a href="${esc(sermon)}" target="_blank" rel="noopener">${esc(s.sermonTitle || "Watch the latest sermon")}</a></div>` : ""}
+      ${!yt && !fb && !sermon ? `<div class="empty">Links will appear here once an admin adds them.</div>` : ""}
+    </div>
+    <div class="card">
+      <h2>🎧 Recommended listening</h2>
+      ${listening.length ? listening.map(resLink).join("") : `<div class="empty">Nothing here yet.</div>`}
+    </div>
+    <div class="card">
+      <h2>📖 Recommended reading</h2>
+      ${reading.length ? reading.map(resLink).join("") : `<div class="empty">Nothing here yet.</div>`}
+    </div>`;
+}
+
+async function kidsView() {
+  const res = (await db.list("resources")).filter(r => r.kind === "kids").sort((a, b) => b.createdAt - a.createdAt);
+  return `
+    <div class="card">
+      <h2>EGC Kingdom Image 🧒</h2>
+      <p class="sub">Kids ministry — faith-filled resources for our children.</p>
+    </div>
+    <div class="card">
+      <h2>Resources</h2>
+      ${res.length ? res.map(resLink).join("") : `<div class="empty">Resources coming soon.</div>`}
+    </div>`;
+}
+
+async function youthView() {
+  const res = (await db.list("resources")).filter(r => r.kind === "youth").sort((a, b) => b.createdAt - a.createdAt);
+  return `
+    <div class="card">
+      <h2>EGC Youth Ministry 🔥</h2>
+      <p class="sub">Resources, teaching and links for our youth.</p>
+    </div>
+    <div class="card">
+      <h2>Resources</h2>
+      ${res.length ? res.map(resLink).join("") : `<div class="empty">Resources coming soon.</div>`}
     </div>`;
 }
 
@@ -396,6 +481,9 @@ async function adminView() {
   const meetings = await db.list("meetings");
   const leaders = await db.list("cellLeaders");
   const pending = (await db.list("testimonies")).filter(t => !t.approved).sort((a, b) => b.createdAt - a.createdAt);
+  const resources = (await db.list("resources")).sort((a, b) => b.createdAt - a.createdAt);
+  const visits = (await db.list("visits")).filter(x => x.status !== "done").sort((a, b) => b.createdAt - a.createdAt);
+  const st = await getSettings();
   const memberOptions = users.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
   const cellOpts = DOMAIN_CELLS.filter(c => auth.canPublishGlobal() || c.id === u.domainCell)
     .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
@@ -504,11 +592,59 @@ async function adminView() {
     </div>` : ""}
 
     <div class="card">
+      <h2>🙋 Visit requests</h2>
+      ${visits.length ? visits.map(x => `
+        <div class="item">
+          <h3>${esc(x.requesterName)}${(x.groupIds || []).length ? "" : ` <span class="pill local">no group</span>`}</h3>
+          <div class="meta">${esc(x.contact || "")}${x.note ? " · " + esc(x.note) : ""} · ${fmt(x.createdAt)}</div>
+          <button class="btn ghost sm" data-visitdone="${x.id}" style="margin-top:6px">Mark done</button>
+        </div>`).join("") : `<div class="empty">No open visit requests.</div>`}
+    </div>
+
+    <div class="card">
       <h2>🔔 Send a reminder / duty</h2>
       <form id="duty-form" class="row">
         <input name="text" placeholder="Reminder or duty for everyone…" required>
         <button class="btn sm" type="submit">Send</button>
       </form>
+    </div>
+
+    <div class="card">
+      <h2>🔗 Church links</h2>
+      <p class="sub">YouTube channel + latest sermon and Facebook page shown on the Resources tab. Paste full https links.</p>
+      <form id="links-form">
+        <label>YouTube channel URL</label><input name="youtubeUrl" type="url" value="${esc(st.youtubeUrl || "")}" placeholder="https://www.youtube.com/@...">
+        <label>Facebook page URL</label><input name="facebookUrl" type="url" value="${esc(st.facebookUrl || "")}" placeholder="https://www.facebook.com/...">
+        <label>Latest sermon — title</label><input name="sermonTitle" value="${esc(st.sermonTitle || "")}" placeholder="e.g. Forming Christ, Driving Change">
+        <label>Latest sermon — video URL</label><input name="sermonUrl" type="url" value="${esc(st.sermonUrl || "")}" placeholder="https://youtu.be/...">
+        <small class="hint">Auto-fetching the newest video needs the Supabase backend (YouTube RSS); for now paste the latest sermon link here.</small>
+        <div style="height:10px"></div>
+        <button class="btn" type="submit">Save links</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>📚 Resources & ministry links</h2>
+      <form id="resource-form">
+        <div class="row">
+          <div><label>Category</label>
+            <select name="kind">
+              ${Object.entries(RES_KINDS).map(([k, label]) => `<option value="${k}">${esc(label)}</option>`).join("")}
+            </select>
+          </div>
+          <div><label>Title</label><input name="title" required></div>
+        </div>
+        <label>Link (URL)</label><input name="url" type="url" placeholder="https://..." required>
+        <label>Note (optional)</label><input name="note">
+        <div style="height:10px"></div>
+        <button class="btn gold" type="submit">Add resource</button>
+      </form>
+      ${resources.length ? resources.map(r => `
+        <div class="item">
+          <h3>${esc(r.title)} <span class="pill local">${esc(RES_KINDS[r.kind] || r.kind)}</span></h3>
+          <div class="meta">${esc(safeUrl(r.url) || r.url || "")}</div>
+          <button class="btn ghost sm" data-delres="${r.id}" style="margin-top:6px">Remove</button>
+        </div>`).join("") : ""}
     </div>
 
     ${auth.isAdmin() ? `
@@ -537,7 +673,7 @@ async function adminView() {
 // ---------------------------------------------------------------------------
 // RENDER + EVENT WIRING
 // ---------------------------------------------------------------------------
-const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, admin: adminView, more: moreView };
+const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, resources: resourcesView, kids: kidsView, youth: youthView, admin: adminView, more: moreView };
 
 async function render() {
   await auth.refresh();
@@ -637,6 +773,52 @@ function wire() {
     const text = prompt("Feedback to the pastoral team:");
     if (!text) return;
     await db.insert("feedback", { groupId: b.dataset.feedback, text, authorId: u.id, authorName: `${u.name} ${u.surname}` });
+    render();
+  });
+
+  // Request a visit (routed to the member's connect-group leaders + admins)
+  const visitForm = $("#visit-form");
+  if (visitForm) visitForm.onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    const groups = await db.list("connectGroups");
+    const myGroups = groups.filter(g => (g.members || []).includes(u.id)).map(g => g.id);
+    await db.insert("visits", {
+      requesterId: u.id, requesterName: `${u.name} ${u.surname}`,
+      contact: u.cellNumber || u.email || "", note: (f.note || "").trim(),
+      groupIds: myGroups, status: "open"
+    });
+    await notify("Visit requested", "Your request was sent to your leaders and admins.");
+    render();
+  };
+  v.querySelectorAll("[data-visitdone]").forEach(b => b.onclick = async () => {
+    await db.update("visits", b.dataset.visitdone, { status: "done" });
+    render();
+  });
+
+  // Resources & church links
+  const linksForm = $("#links-form");
+  if (linksForm) linksForm.onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    await saveSettings({
+      youtubeUrl: safeUrl(f.youtubeUrl), facebookUrl: safeUrl(f.facebookUrl),
+      sermonUrl: safeUrl(f.sermonUrl), sermonTitle: (f.sermonTitle || "").trim()
+    });
+    await notify("Links saved", "Church links updated.");
+    render();
+  };
+  const resForm = $("#resource-form");
+  if (resForm) resForm.onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    if (!safeUrl(f.url)) { alert("Please enter a full link starting with http:// or https://"); return; }
+    await db.insert("resources", { kind: f.kind, title: f.title, url: safeUrl(f.url), note: (f.note || "").trim() });
+    await notify("Resource added", f.title);
+    render();
+  };
+  v.querySelectorAll("[data-delres]").forEach(b => b.onclick = async () => {
+    await db.remove("resources", b.dataset.delres);
     render();
   });
 
