@@ -74,7 +74,18 @@ const resLinkFull = r => {
   </div>`;
 };
 const resLink = r => { const url = safeUrl(r.url); return `<div class="item"><h3>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)}</h3>${r.note ? `<div class="meta">${esc(r.note)}</div>` : ""}</div>`; };
-const DUTIES = { communion: "Communion", prayer: "Prayer", ushering: "Ushering" };
+// Serving-roster duty types are configurable by admins (stored in settings).
+const DEFAULT_DUTIES = { communion: "Communion", prayer: "Prayer", ushering: "Ushering" };
+let DUTIES = { ...DEFAULT_DUTIES };
+async function loadDuties() {
+  const st = await getSettings();
+  if (Array.isArray(st.dutyTypes) && st.dutyTypes.length) {
+    DUTIES = {};
+    st.dutyTypes.forEach(d => { if (d && d.id) DUTIES[d.id] = d.name || d.id; });
+  } else {
+    DUTIES = { ...DEFAULT_DUTIES };
+  }
+}
 const monthLabel = ym => { if (!ym) return ""; const [y, m] = ym.split("-"); return `${MONTHS[(+m) - 1] || ""} ${y}`; };
 const thisMonth = () => todayStr().slice(0, 7);
 // Shared renderer for the serving roster, grouped by month.
@@ -444,11 +455,18 @@ async function membersView() {
   const visible = seeAll ? users : users.filter(x =>
     x.id === u.id || x.domainCell === u.domainCell || myGroupMemberIds.has(x.id));
 
-  // A member who has been assigned as a cell leader is titled Domain Cell Leader.
+  // Title falls back to leadership: a plain member who leads a domain cell is
+  // titled Domain Cell Leader; one who leads a connect group, Connect Group Leader.
   const leaderIds = new Set(leaders.map(l => l.userId));
-  const titleOf = x => (leaderIds.has(x.id) && x.role === "member") ? "cell_leader" : x.role;
+  const groupLeaderIds = new Set(groups.map(g => g.leaderId).filter(Boolean));
+  const titleOf = x => {
+    if (x.role && x.role !== "member") return x.role;
+    if (leaderIds.has(x.id)) return "cell_leader";
+    if (groupLeaderIds.has(x.id)) return "group_leader";
+    return x.role;
+  };
 
-  const order = ["administrator", "senior_pastor", "pastoral_core", "cell_leader", "member"];
+  const order = ["administrator", "senior_pastor", "pastoral_core", "cell_leader", "group_leader", "member"];
   const byRole = {};
   visible.forEach(x => { const t = titleOf(x); (byRole[t] ||= []).push(x); });
   const sections = order.filter(r => byRole[r] && byRole[r].length);
@@ -502,6 +520,7 @@ async function groupsView() {
       const gDuties = allDuties.filter(d => d.groupId === g.id).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
       const myDuties = gDuties.filter(d => d.memberId === u.id);
       const memberOpts = gMembers.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
+      const allMemberOpts = users.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
       const inGroup = memberIds.includes(u.id);
       return `
       <div class="card">
@@ -541,6 +560,16 @@ async function groupsView() {
               <div class="meta">Duties ${done}/${md.length} done · 🙏 ${prayers.filter(x => x.authorId === m.id).length} prayer(s) · ✨ ${testis.filter(x => x.authorId === m.id).length} testimony(ies)</div>
             </div>`;
           }).join("") : `<div class="empty">No members yet.</div>`}
+          <div class="meta" style="margin-top:10px"><b>👥 Manage group members</b></div>
+          <form class="row addmember-form" data-group="${g.id}">
+            <select name="userId" required><option value="">Add a member…</option>${allMemberOpts}</select>
+            <button class="btn gold sm" type="submit">Add</button>
+          </form>
+          ${gMembers.length ? `<div class="meta" style="margin-top:6px">In this group: ${gMembers.map(m => `${esc(memberName(m))} <a href="#" data-groupremove="${g.id}:${m.id}" title="remove from group" style="color:var(--danger);text-decoration:none">✕</a>`).join(" · ")}</div>` : ""}
+          <div class="row" style="margin-top:10px">
+            <button class="btn ghost sm" data-meeting="${g.id}">+ Log meeting</button>
+            <button class="btn ghost sm" data-feedback="${g.id}">+ Feedback to pastoral team</button>
+          </div>
         ` : ""}
         ${(!isLeader && memberIds.includes(u.id) && myDuties.length) ? `
           <div class="meta" style="margin-top:6px"><b>🗓️ My duties</b></div>
@@ -1016,7 +1045,16 @@ async function adminView() {
     ${auth.canConfigure() ? `
     <div class="card">
       <h2>🗓️ Serving roster</h2>
-      <p class="sub">Pick the month and the connect group on ministry, then assign its members to Communion, Prayer and Ushering.</p>
+      <p class="sub">Pick the month and the connect group on ministry, then assign its members to the serving duties below.</p>
+      ${auth.isAdmin() ? `
+      <div class="notice" style="margin-bottom:12px">
+        <b>⚙️ Configure duty types</b>
+        <form id="dutytype-form" class="row" style="margin-top:8px">
+          <input name="name" placeholder="Add a duty type (e.g. Welcoming)" required>
+          <button class="btn sm" type="submit">Add</button>
+        </form>
+        <div class="meta" style="margin-top:6px">${Object.entries(DUTIES).map(([k, l]) => `${esc(l)} <a href="#" data-delduty="${esc(k)}" title="remove" style="color:var(--danger);text-decoration:none">✕</a>`).join(" · ") || "No duty types."}</div>
+      </div>` : ""}
       <form id="roster-form">
         <div class="row">
           <div><label>Month</label><input name="month" type="month" value="${thisMonth()}" required></div>
@@ -1213,7 +1251,7 @@ const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, member
 
 async function render() {
   await auth.refresh();
-  await loadCells();
+  await Promise.all([loadCells(), loadDuties()]);
   notifItems = await buildNotifications();
   const inner = await VIEWS[view]();
   shell(inner);
@@ -1311,6 +1349,28 @@ function wire() {
     };
   }
   v.querySelectorAll("[data-delroster]").forEach(b => b.onclick = async e => { e.preventDefault(); const r = await db.get("roster", b.dataset.delroster); await db.remove("roster", b.dataset.delroster); logAudit(`Removed roster entry${r ? `: ${r.memberName} · ${DUTIES[r.duty] || r.duty} · ${monthLabel(r.month)}` : ""}`); render(); });
+  // Configure serving-duty types (admin)
+  const dtForm = $("#dutytype-form");
+  if (dtForm) dtForm.onsubmit = async e => {
+    e.preventDefault();
+    const name = (new FormData(e.target).get("name") || "").toString().trim();
+    if (!name) return;
+    const current = Object.entries(DUTIES).map(([id, nm]) => ({ id, name: nm }));
+    let id = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    if (!id || current.some(d => d.id === id)) id = "duty_" + Date.now().toString(36);
+    current.push({ id, name });
+    await saveSettings({ dutyTypes: current });
+    logAudit(`Added serving-duty type "${name}"`);
+    render();
+  };
+  v.querySelectorAll("[data-delduty]").forEach(b => b.onclick = async e => {
+    e.preventDefault();
+    const id = b.dataset.delduty;
+    const remaining = Object.entries(DUTIES).map(([i, nm]) => ({ id: i, name: nm })).filter(d => d.id !== id);
+    await saveSettings({ dutyTypes: remaining });
+    logAudit(`Removed serving-duty type "${DUTIES[id] || id}"`);
+    render();
+  });
 
   // Preaching roster (admin-only card)
   const preachForm = $("#preach-form");
@@ -1354,6 +1414,8 @@ function wire() {
       leaderName: leader ? memberName(leader) : "",
       members: leader ? [leader.id] : []
     });
+    // A plain member appointed to lead becomes a Connect Group Leader.
+    if (leader && (!leader.role || leader.role === "member")) await db.update("users", leader.id, { role: "group_leader" });
     logAudit(`Created connect group "${f.name}"${leader ? ` · leader ${memberName(leader)}` : " (no leader)"}`);
     render();
   };
@@ -1373,6 +1435,7 @@ function wire() {
       leaderName: leader ? memberName(leader) : "",
       members
     });
+    if (leader && (!leader.role || leader.role === "member")) await db.update("users", leader.id, { role: "group_leader" });
     const wasLeader = before ? (before.leaderName || "none") : "none";
     const nowLeader = leader ? memberName(leader) : "none";
     if (wasLeader !== nowLeader) logAudit(`Changed leader of "${d.name}": ${wasLeader} → ${nowLeader}`);
