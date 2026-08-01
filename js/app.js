@@ -25,7 +25,16 @@ const $ = sel => document.querySelector(sel);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmt = ts => new Date(ts).toLocaleString();
-const roleName = id => (ROLES.find(r => r.id === id) || {}).name || id;
+// Built-in roles plus any admin-defined custom roles (loaded from settings).
+let ROLES_ALL = ROLES.slice();
+const roleName = id => (ROLES_ALL.find(r => r.id === id) || {}).name || id;
+// Capability tiers an admin can assign to a custom role.
+const ROLE_TIERS = [
+  { id: "leadership", name: "Leadership — can configure (like Pastoral Core)" },
+  { id: "leader", name: "Leader — can lead cells/groups" },
+  { id: "member", name: "Member — view only" }
+];
+const roleTierName = id => (ROLE_TIERS.find(t => t.id === id) || {}).name || id;
 const cellName = id => (CELLS.find(c => c.id === id) || {}).name || id;
 const memberName = x => `${x.name || ""} ${x.surname || ""}`.trim() || (x.email || "Member");
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
@@ -114,6 +123,15 @@ async function loadConfig() {
     features: st.features && typeof st.features === "object" ? st.features : {},
     tabLabels: st.tabLabels && typeof st.tabLabels === "object" ? st.tabLabels : {}
   };
+  // Custom roles: merge into the role list (before "Member") and register
+  // their capability tier so permission checks apply to them.
+  const custom = Array.isArray(st.customRoles) ? st.customRoles.filter(r => r && r.id && r.name) : [];
+  const builtins = ROLES.slice();
+  const mi = builtins.findIndex(r => r.id === "member");
+  ROLES_ALL = mi >= 0 ? [...builtins.slice(0, mi), ...custom, builtins[mi]] : [...builtins, ...custom];
+  const tiers = {};
+  custom.forEach(r => { tiers[r.id] = ["leadership", "leader", "member"].includes(r.tier) ? r.tier : "member"; });
+  auth.roleTiers = tiers;
 }
 // A feature/tab is on unless explicitly turned off. Home/Admin/More are never toggleable.
 const featureOn = key => CFG.features[key] !== false;
@@ -525,7 +543,9 @@ async function membersView() {
     return x.role;
   };
 
-  const order = ["administrator", "senior_pastor", "pastoral_core", "cell_leader", "group_leader", "member"];
+  const builtinOrder = ["administrator", "senior_pastor", "pastoral_core", "cell_leader", "group_leader"];
+  const customIds = ROLES_ALL.map(r => r.id).filter(id => !builtinOrder.includes(id) && id !== "member");
+  const order = [...builtinOrder, ...customIds, "member"];
   const byRole = {};
   visible.forEach(x => { const t = titleOf(x); (byRole[t] ||= []).push(x); });
   const sections = order.filter(r => byRole[r] && byRole[r].length);
@@ -885,6 +905,8 @@ async function adminView() {
   const st = await getSettings();
   const admins = users.filter(x => x.role === "administrator");
   const audit = auth.isAdmin() ? (await db.list("auditLog")).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 150) : [];
+  const builtinRoleIds = ROLES.map(r => r.id);
+  const customRolesList = ROLES_ALL.filter(r => !builtinRoleIds.includes(r.id)).map(r => ({ ...r, tier: auth.roleTiers[r.id] || "member" }));
   const groupLeaderIds = new Set(groups.map(g => g.leaderId).filter(Boolean));
   const leaderMembers = users.filter(x => ["pastoral_core", "senior_pastor", "cell_leader"].includes(x.role) || groupLeaderIds.has(x.id));
   const scopeSel = (val) => `<select name="scope">${auth.canPublishGlobal() ? `<option value="global" ${val === "global" ? "selected" : ""}>Church-wide</option>` : ""}<option value="local" ${val === "local" ? "selected" : ""}>Local (a cell)</option></select>`;
@@ -923,6 +945,20 @@ async function adminView() {
         <div style="height:8px"></div>
         <button class="btn" type="submit">Save tabs & features</button>
       </form>
+      <div class="meta" style="margin-top:14px"><b>Custom roles</b> — add roles beyond the built-in ones and choose what they can do.</div>
+      <form id="role-form">
+        <div class="row">
+          <div><label>Role name</label><input name="name" placeholder="e.g. Worship Leader" required></div>
+          <div><label>Can do</label><select name="tier">${ROLE_TIERS.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></div>
+        </div>
+        <div style="height:8px"></div>
+        <button class="btn gold sm" type="submit">Add role</button>
+      </form>
+      ${customRolesList.length ? customRolesList.map(r => `
+        <div class="item">
+          <h3>${esc(r.name)} <span class="pill role">${esc(roleTierName(r.tier))}</span></h3>
+          <button class="btn ghost sm" data-delrole="${esc(r.id)}" style="margin-top:6px">Remove role</button>
+        </div>`).join("") : `<div class="meta" style="margin-top:6px">No custom roles yet.</div>`}
     </div>` : ""}
 
     <div class="card">
@@ -1305,7 +1341,7 @@ async function adminView() {
           <div class="row" style="margin-top:6px">
             <div><label>Role</label>
               <select data-role-for="${x.id}">
-                ${ROLES.map(r => `<option value="${r.id}" ${r.id === x.role ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
+                ${ROLES_ALL.map(r => `<option value="${r.id}" ${r.id === x.role ? "selected" : ""}>${esc(r.name)}</option>`).join("")}
               </select>
             </div>
             <div><label>Domain cell</label>
@@ -1464,6 +1500,35 @@ function wire() {
     logAudit("Updated tabs & feature visibility");
     render();
   };
+  // Custom roles: add
+  const roleForm = $("#role-form");
+  if (roleForm) roleForm.onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    const name = (f.name || "").trim();
+    if (!name) return;
+    const tier = ["leadership", "leader", "member"].includes(f.tier) ? f.tier : "member";
+    const st = await getSettings();
+    const custom = Array.isArray(st.customRoles) ? st.customRoles.slice() : [];
+    let id = "role_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    if (id === "role_" || ROLES_ALL.some(r => r.id === id) || custom.some(r => r.id === id)) id = "role_" + Date.now().toString(36);
+    custom.push({ id, name, tier });
+    await saveSettings({ customRoles: custom });
+    logAudit(`Added custom role "${name}" (${roleTierName(tier)})`);
+    render();
+  };
+  // Custom roles: remove (members holding it fall back to Member)
+  v.querySelectorAll("[data-delrole]").forEach(b => b.onclick = async () => {
+    const id = b.dataset.delrole;
+    if (!confirm("Remove this role? Anyone with it becomes a Member.")) return;
+    const st = await getSettings();
+    const custom = (Array.isArray(st.customRoles) ? st.customRoles : []).filter(r => r.id !== id);
+    const removed = roleName(id);
+    await saveSettings({ customRoles: custom });
+    for (const m of (await db.list("users")).filter(x => x.role === id)) await db.update("users", m.id, { role: "member" });
+    logAudit(`Removed custom role "${removed}"`);
+    render();
+  });
   // Configure serving-duty types (admin)
   const dtForm = $("#dutytype-form");
   if (dtForm) dtForm.onsubmit = async e => {
