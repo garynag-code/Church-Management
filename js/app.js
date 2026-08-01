@@ -151,20 +151,21 @@ function applyBrand() {
 const monthLabel = ym => { if (!ym) return ""; const [y, m] = ym.split("-"); return `${MONTHS[(+m) - 1] || ""} ${y}`; };
 const thisMonth = () => todayStr().slice(0, 7);
 // Shared renderer for the serving roster, grouped by month.
-function rosterMonthsHtml(roster, groups, withRemove) {
+// Read-only serving roster: for each scheduled month, the connect group on
+// ministry and the members assigned to each duty (assigned by the group leader).
+function rosterMonthsHtml(schedule, roster, groups) {
   const gName = id => (groups.find(g => g.id === id) || {}).name || "";
-  const byM = {};
-  roster.forEach(r => { (byM[r.month] ||= []).push(r); });
-  const months = Object.keys(byM).sort();
+  const months = schedule.slice().sort((a, b) => (a.month || "").localeCompare(b.month || ""));
   if (!months.length) return `<div class="empty">No roster set yet.</div>`;
-  return months.map(mo => {
-    const items = byM[mo];
-    const grp = gName(items[0].groupId);
+  return months.map(s => {
+    const rs = roster.filter(r => r.month === s.month && r.groupId === s.groupId);
     const byDuty = {};
-    items.forEach(r => { (byDuty[r.duty] ||= []).push(r); });
+    rs.forEach(r => { (byDuty[r.duty] ||= []).push(r); });
+    const lines = Object.keys(DUTIES).map(d => (byDuty[d] && byDuty[d].length)
+      ? `<div class="meta"><b>${DUTIES[d]}:</b> ${byDuty[d].map(r => esc(r.memberName)).join(", ")}</div>` : "").join("");
     return `<div class="item">
-      <h3>${monthLabel(mo)}${grp ? ` <span class="pill local">${esc(grp)} on ministry</span>` : ""}</h3>
-      ${Object.keys(DUTIES).map(d => (byDuty[d] && byDuty[d].length) ? `<div class="meta"><b>${DUTIES[d]}:</b> ${byDuty[d].map(r => esc(r.memberName) + (withRemove ? ` <a href="#" data-delroster="${r.id}" title="remove" style="color:var(--danger);text-decoration:none">✕</a>` : "")).join(", ")}</div>` : "").join("")}
+      <h3>${monthLabel(s.month)} <span class="pill local">${esc(gName(s.groupId))} on ministry</span></h3>
+      ${lines || `<div class="meta">Duties to be assigned by the group leader.</div>`}
     </div>`;
   }).join("");
 }
@@ -394,7 +395,8 @@ async function upcomingView() {
   const today = todayStr();
   const upcoming = events.filter(e => e.date >= today);
   const past = events.filter(e => e.date < today).reverse(); // most recent first
-  const roster = (await db.list("roster")).filter(r => r.month >= thisMonth());
+  const roster = await db.list("roster");
+  const schedule = (await db.list("rosterMonths")).filter(s => s.month >= thisMonth());
   const groups = await db.list("connectGroups");
 
   const row = e => `
@@ -406,8 +408,8 @@ async function upcomingView() {
   return `
     <div class="card">
       <h2>🗓️ Serving roster</h2>
-      <p class="sub">Communion, Prayer and Ushering duties by month.</p>
-      ${rosterMonthsHtml(roster, groups, false)}
+      <p class="sub">The connect group on ministry each month, and the members serving.</p>
+      ${rosterMonthsHtml(schedule, roster, groups)}
     </div>
     <div class="card">
       <h2>Upcoming Events 📅</h2>
@@ -525,6 +527,8 @@ async function groupsView() {
   const allDuties = await db.list("groupDuties");
   const prayers = await db.list("prayerRequests");
   const testis = await db.list("testimonies");
+  const schedule = (await db.list("rosterMonths")).filter(s => s.month >= thisMonth()).sort((a, b) => (a.month || "").localeCompare(b.month || ""));
+  const allRoster = await db.list("roster");
 
   const dutyRow = (d, leader) => `
     <div class="item">
@@ -581,6 +585,29 @@ async function groupsView() {
             <button class="btn sm" type="submit">Assign duty</button>
           </form>
           ${gDuties.length ? `<div class="meta" style="margin-top:8px"><b>This group's duties</b></div>${gDuties.map(d => dutyRow(d, true)).join("")}` : ""}
+          ${(() => {
+            const myMonths = schedule.filter(s => s.groupId === g.id);
+            if (!myMonths.length) return "";
+            return `<div class="meta" style="margin-top:10px"><b>🗓️ Serving roster — your months on ministry</b></div>` + myMonths.map(s => {
+              const rs = allRoster.filter(r => r.month === s.month && r.groupId === g.id);
+              const assigned = Object.keys(DUTIES).map(d => {
+                const who = rs.filter(r => r.duty === d);
+                return who.length ? `<div class="meta"><b>${DUTIES[d]}:</b> ${who.map(r => `${esc(r.memberName)} <a href="#" data-delroster="${r.id}" title="remove" style="color:var(--danger);text-decoration:none">✕</a>`).join(", ")}</div>` : "";
+              }).join("");
+              return `<div class="item">
+                <h3>${monthLabel(s.month)}</h3>
+                ${assigned || `<div class="meta">No duties assigned yet.</div>`}
+                <form class="roster-assign-form" data-group="${g.id}" data-month="${s.month}" style="margin-top:6px">
+                  <div class="row">
+                    <div><label>Duty</label><select name="duty">${Object.entries(DUTIES).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></div>
+                    <div><label>Member</label><select name="memberId" required><option value="">Select…</option>${memberOpts}</select></div>
+                  </div>
+                  <div style="height:6px"></div>
+                  <button class="btn sm" type="submit">Assign to duty</button>
+                </form>
+              </div>`;
+            }).join("");
+          })()}
           <div class="meta" style="margin-top:10px"><b>📊 Engagement report</b></div>
           ${gMembers.length ? gMembers.map(m => {
             const md = gDuties.filter(x => x.memberId === m.id);
@@ -1029,7 +1056,8 @@ async function adminView() {
   const visits = (await db.list("visits")).filter(x => x.status !== "done").sort((a, b) => b.createdAt - a.createdAt);
   const announcements = (await db.list("announcements")).sort((a, b) => b.createdAt - a.createdAt).filter(canManagePost);
   const events = (await db.list("events")).sort((a, b) => evTs(b.date) - evTs(a.date)).filter(canManagePost);
-  const roster = (await db.list("roster")).filter(r => r.month >= thisMonth());
+  const roster = await db.list("roster");
+  const schedule = (await db.list("rosterMonths")).filter(s => s.month >= thisMonth()).sort((a, b) => (a.month || "").localeCompare(b.month || ""));
   const preaching = (await db.list("preaching")).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const categories = (await db.list("resourceCategories")).sort((a, b) => a.name.localeCompare(b.name));
   const st = await getSettings();
@@ -1180,23 +1208,32 @@ async function adminView() {
 
     ${auth.canConfigure() ? `
     <div class="card">
-      <h2>🗓️ Serving roster</h2>
-      <p class="sub">Pick the month and the connect group on ministry, then assign its members to the serving duties. Manage the duty types in the Setup tab.</p>
-      <form id="roster-form">
+      <h2>🗓️ Serving roster — monthly schedule</h2>
+      <p class="sub">Assign a connect group to each month for the year. That group's leader then assigns their members to the serving duties (in the Groups tab).</p>
+      <form id="rostermonth-form">
         <div class="row">
           <div><label>Month</label><input name="month" type="month" value="${thisMonth()}" required></div>
           <div><label>Connect group on ministry</label>
-            <select name="groupId" id="roster-group" required>${groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select>
+            <select name="groupId" required>${groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join("")}</select>
           </div>
         </div>
-        <div class="row">
-          <div><label>Duty</label><select name="duty">${Object.entries(DUTIES).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></div>
-          <div><label>Member (of that group)</label><select name="memberId" id="roster-member" required></select></div>
-        </div>
         <div style="height:10px"></div>
-        <button class="btn" type="submit">Assign to roster</button>
+        <button class="btn" type="submit">Set month</button>
       </form>
-      <div style="margin-top:10px">${rosterMonthsHtml(roster, groups, true)}</div>
+      <div style="margin-top:10px">
+        ${schedule.length ? schedule.map(s => {
+          const g = groups.find(x => x.id === s.groupId);
+          const rs = roster.filter(r => r.month === s.month && r.groupId === s.groupId);
+          const byDuty = {};
+          rs.forEach(r => { (byDuty[r.duty] ||= []).push(r); });
+          const lines = Object.keys(DUTIES).map(d => (byDuty[d] && byDuty[d].length) ? `<div class="meta"><b>${DUTIES[d]}:</b> ${byDuty[d].map(r => esc(r.memberName)).join(", ")}</div>` : "").join("");
+          return `<div class="item">
+            <h3>${monthLabel(s.month)} <span class="pill local">${esc(g ? g.name : "?")}</span></h3>
+            ${lines || `<div class="meta">Awaiting duty assignments from the group leader.</div>`}
+            <button class="btn ghost sm" data-delrostermonth="${s.id}" style="margin-top:6px">Remove month</button>
+          </div>`;
+        }).join("") : `<div class="empty">No months scheduled yet.</div>`}
+      </div>
     </div>
 
     <div class="card">
@@ -1453,32 +1490,37 @@ function wire() {
     render();
   });
 
-  // Serving roster: assign members of the chosen group to a duty
-  const rForm = $("#roster-form");
-  if (rForm) {
-    const rgSel = $("#roster-group"), rmSel = $("#roster-member");
-    (async () => {
-      const groups = await db.list("connectGroups");
-      const users = await db.list("users");
-      const fill = () => {
-        const g = groups.find(x => x.id === rgSel.value);
-        const ids = g ? (g.members || []) : [];
-        const opts = users.filter(x => ids.includes(x.id));
-        rmSel.innerHTML = opts.length ? opts.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("") : `<option value="">(no members in this group)</option>`;
-      };
-      rgSel.onchange = fill; fill();
-    })();
-    rForm.onsubmit = async e => {
-      e.preventDefault();
-      const f = Object.fromEntries(new FormData(e.target));
-      if (!f.memberId) { alert("That group has no members yet — add members to the group first."); return; }
-      const m = await db.get("users", f.memberId);
-      await db.insert("roster", { month: f.month, groupId: f.groupId, duty: f.duty, memberId: f.memberId, memberName: m ? memberName(m) : "" });
-      await notify("Roster updated", `${DUTIES[f.duty]} · ${monthLabel(f.month)}`);
-      logAudit(`Rostered ${m ? memberName(m) : f.memberId} for ${DUTIES[f.duty] || f.duty} · ${monthLabel(f.month)}`);
-      render();
-    };
-  }
+  // Serving roster schedule (admin/pastoral): assign a connect group to a month
+  const rmForm = $("#rostermonth-form");
+  if (rmForm) rmForm.onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    if (!f.month || !f.groupId) return;
+    const existing = (await db.list("rosterMonths")).find(s => s.month === f.month);
+    if (existing) await db.update("rosterMonths", existing.id, { groupId: f.groupId });
+    else await db.insert("rosterMonths", { month: f.month, groupId: f.groupId });
+    const g = await db.get("connectGroups", f.groupId);
+    logAudit(`Serving roster: ${g ? g.name : f.groupId} on ministry for ${monthLabel(f.month)}`);
+    render();
+  };
+  v.querySelectorAll("[data-delrostermonth]").forEach(b => b.onclick = async () => {
+    const s = await db.get("rosterMonths", b.dataset.delrostermonth);
+    await db.remove("rosterMonths", b.dataset.delrostermonth);
+    if (s) for (const r of (await db.list("roster")).filter(r => r.month === s.month && r.groupId === s.groupId)) await db.remove("roster", r.id);
+    logAudit(`Serving roster: removed ${s ? monthLabel(s.month) : "a month"} from the schedule`);
+    render();
+  });
+  // Serving roster duties (group leader): assign a member of the group to a duty
+  v.querySelectorAll(".roster-assign-form").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(f));
+    if (!d.memberId) return;
+    const m = await db.get("users", d.memberId);
+    await db.insert("roster", { month: f.dataset.month, groupId: f.dataset.group, duty: d.duty, memberId: d.memberId, memberName: m ? memberName(m) : "" });
+    await db.insert("notifications", { userId: d.memberId, title: "Serving roster", body: `${DUTIES[d.duty] || d.duty} · ${monthLabel(f.dataset.month)}` });
+    logAudit(`Rostered ${m ? memberName(m) : d.memberId} for ${DUTIES[d.duty] || d.duty} · ${monthLabel(f.dataset.month)}`);
+    render();
+  });
   v.querySelectorAll("[data-delroster]").forEach(b => b.onclick = async e => { e.preventDefault(); const r = await db.get("roster", b.dataset.delroster); await db.remove("roster", b.dataset.delroster); logAudit(`Removed roster entry${r ? `: ${r.memberName} · ${DUTIES[r.duty] || r.duty} · ${monthLabel(r.month)}` : ""}`); render(); });
   // Church configuration: branding
   const brandForm = $("#brand-form");

@@ -20,7 +20,7 @@ const COLLECTIONS = [
   "meetings", "feedback", "prayerRequests", "testimonies",
   "notifications", "duties", "events", "resources", "settings", "visits",
   "roster", "preaching", "groupDuties", "resourceCategories", "domainCells",
-  "auditLog"
+  "auditLog", "rosterMonths"
 ];
 
 function uid() {
