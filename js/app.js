@@ -402,7 +402,7 @@ async function homeView() {
   const weekEnd = (() => { const d = new Date(today + "T00:00:00"); d.setDate(d.getDate() + 7); return d.toISOString().slice(0, 10); })();
   const week = events
     .filter(e => (e.scope === "global" || e.cellId === u.domainCell) && e.date >= today && e.date <= weekEnd)
-    .sort((a, b) => evTs(a) - evTs(b));
+    .sort((a, b) => evTs(a.date) - evTs(b.date));
 
   return `
     <div class="card">
@@ -446,7 +446,7 @@ async function upcomingView() {
   const seeAll = seeAllMembers(); // admins/pastoral/senior see the whole church
   const all = await db.list("events");
   const events = (seeAll ? all : all.filter(e => e.scope === "global" || e.cellId === u.domainCell))
-    .sort((a, b) => evTs(a) - evTs(b));
+    .sort((a, b) => evTs(a.date) - evTs(b.date));
   const today = todayStr();
   const upcoming = events.filter(e => e.date >= today);
   const past = events.filter(e => e.date < today).reverse(); // most recent first
@@ -1084,7 +1084,7 @@ async function adminView() {
   const resources = (await db.list("resources")).sort((a, b) => b.createdAt - a.createdAt);
   const visits = (await db.list("visits")).filter(x => x.status !== "done").sort((a, b) => b.createdAt - a.createdAt);
   const announcements = (await db.list("announcements")).sort((a, b) => b.createdAt - a.createdAt).filter(canManagePost);
-  const events = (await db.list("events")).sort((a, b) => evTs(b) - evTs(a)).filter(canManagePost);
+  const events = (await db.list("events")).sort((a, b) => evTs(b.date) - evTs(a.date)).filter(canManagePost);
   const roster = (await db.list("roster")).filter(r => r.month >= thisMonth());
   const preaching = (await db.list("preaching")).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const categories = (await db.list("resourceCategories")).sort((a, b) => a.name.localeCompare(b.name));
