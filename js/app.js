@@ -523,15 +523,8 @@ async function membersView() {
   const users = await db.list("users");
   const leaders = await db.list("cellLeaders");
   const groups = await db.list("connectGroups");
-  const seeAll = seeAllMembers();
-
-  const myGroupMemberIds = new Set();
-  groups.forEach(g => {
-    if ((g.members || []).includes(u.id) || g.leaderId === u.id)
-      (g.members || []).forEach(id => myGroupMemberIds.add(id));
-  });
-  const visible = seeAll ? users : users.filter(x =>
-    x.id === u.id || x.domainCell === u.domainCell || myGroupMemberIds.has(x.id));
+  // Administrators, Pastoral/Senior (leadership) and leaders see everyone.
+  const seeAll = auth.canLeadCell();
 
   // Title falls back to leadership: a plain member who leads a domain cell is
   // titled Domain Cell Leader; one who leads a connect group, Connect Group Leader.
@@ -544,6 +537,16 @@ async function membersView() {
     return x.role;
   };
 
+  const myGroupMemberIds = new Set();
+  groups.forEach(g => {
+    if ((g.members || []).includes(u.id) || g.leaderId === u.id)
+      (g.members || []).forEach(id => myGroupMemberIds.add(id));
+  });
+  // A plain member sees: themselves, everyone in their connect group(s), and
+  // all leadership (any leader / pastoral / admin — anyone above plain member).
+  const visible = seeAll ? users : users.filter(x =>
+    x.id === u.id || myGroupMemberIds.has(x.id) || titleOf(x) !== "member");
+
   const builtinOrder = ["administrator", "senior_pastor", "pastoral_core", "cell_leader", "group_leader"];
   const customIds = ROLES_ALL.map(r => r.id).filter(id => !builtinOrder.includes(id) && id !== "member");
   const order = [...builtinOrder, ...customIds, "member"];
@@ -554,7 +557,7 @@ async function membersView() {
   return `
     <div class="card">
       <h2>👥 Members</h2>
-      <p class="sub">${visible.length} ${seeAll ? "member(s) across the church" : "contact(s) you can see"}, listed with their title.</p>
+      <p class="sub">${seeAll ? `${visible.length} member(s) across the church` : `${visible.length} contact(s) — your connect group, plus all leaders &amp; pastoral`}, listed with their title.</p>
     </div>
     ${sections.length ? sections.map(r => `
       <div class="card">
