@@ -152,9 +152,22 @@ export const auth = {
   },
 
   // --- Role helpers ---------------------------------------------------------
+  // Every role maps to a capability tier. Built-ins are fixed; custom roles
+  // created by an admin register their tier in `roleTiers` (set from settings
+  // by the app). Tiers, most to least powerful: admin > leadership > leader > member.
+  roleTiers: {},   // { customRoleId: "leadership" | "leader" | "member" }
+  tierOf(role) {
+    const builtin = {
+      administrator: "admin",
+      pastoral_core: "leadership", senior_pastor: "leadership",
+      cell_leader: "leader", group_leader: "leader",
+      member: "member"
+    };
+    return builtin[role] || this.roleTiers[role] || "member";
+  },
   is(...roles) { return this.current && roles.includes(this.current.role); },
-  isAdmin()    { return this.is("administrator"); },
-  canConfigure(){ return this.is("administrator", "pastoral_core", "senior_pastor"); },
-  canPublishGlobal() { return this.is("administrator", "pastoral_core", "senior_pastor"); },
-  canLeadCell() { return this.is("administrator", "pastoral_core", "senior_pastor", "cell_leader"); }
+  isAdmin()    { return !!this.current && this.tierOf(this.current.role) === "admin"; },
+  canConfigure(){ return !!this.current && ["admin", "leadership"].includes(this.tierOf(this.current.role)); },
+  canPublishGlobal() { return this.canConfigure(); },
+  canLeadCell() { return !!this.current && ["admin", "leadership", "leader"].includes(this.tierOf(this.current.role)); }
 };
