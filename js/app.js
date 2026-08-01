@@ -348,7 +348,7 @@ function shell(inner) {
     ...mainTabs,
     ...(auth.canLeadCell() ? [["admin", "🛠️", "Admin"]] : []),
     ...membersTab,
-    ["more", "⚙️", "More"],
+    ["more", "👤", "My Profile"],
     ...(auth.isAdmin() ? [["config", "🔧", "Setup"]] : [])
   ];
   const unread = notifItems.filter(n => (n.ts || 0) > getNotifSeen()).length;
