@@ -114,13 +114,40 @@ const impl = isSyncEnabled() ? remote : local;
 // Expose the Supabase client (for Supabase Auth in auth.js). Null in local mode.
 export async function getSupabase() { return isSyncEnabled() ? await supabase() : null; }
 
+// --- Short-lived read cache -------------------------------------------------
+// A single render fans out ~15 list() calls (the notifications bell and the
+// active view read many of the same collections). Without this each one is a
+// separate Supabase round-trip, which makes every tap feel sticky. We coalesce
+// concurrent reads of a collection into one request and reuse the result for a
+// short window; any write to that collection clears its entry so data stays
+// fresh. Arrays are copied out so callers can safely .sort() them.
+const CACHE_TTL = 4000; // ms
+const listCache = new Map();   // collection -> { at, data }
+const inflight  = new Map();   // collection -> Promise<data>
+
+async function cachedList(c) {
+  const hit = listCache.get(c);
+  if (hit && (Date.now() - hit.at) < CACHE_TTL) return hit.data.slice();
+  if (inflight.has(c)) return (await inflight.get(c)).slice();
+  const pr = (async () => {
+    const data = await impl.list(c);
+    listCache.set(c, { at: Date.now(), data });
+    inflight.delete(c);
+    return data;
+  })();
+  inflight.set(c, pr);
+  return (await pr).slice();
+}
+function invalidate(c) { listCache.delete(c); inflight.delete(c); }
+
 export const db = {
   mode: isSyncEnabled() ? "sync" : "local",
   collections: COLLECTIONS,
   uid,
-  async list(c)               { return await impl.list(c); },
+  invalidate,
+  async list(c)               { return await cachedList(c); },
   async get(c, id)            { return await impl.get(c, id); },
-  async insert(c, obj)        { return await impl.insert(c, obj); },
-  async update(c, id, patch)  { return await impl.update(c, id, patch); },
-  async remove(c, id)         { return await impl.remove(c, id); }
+  async insert(c, obj)        { const r = await impl.insert(c, obj); invalidate(c); return r; },
+  async update(c, id, patch)  { const r = await impl.update(c, id, patch); invalidate(c); return r; },
+  async remove(c, id)         { const r = await impl.remove(c, id); invalidate(c); return r; }
 };

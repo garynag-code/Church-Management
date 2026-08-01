@@ -25,12 +25,16 @@
   }
 }
 * { box-sizing: border-box; }
+html, body { overflow-x: hidden; width: 100%; }
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+  /* Stop the page rubber-banding sideways when the bottom nav is swiped —
+     fixes the "whole screen moves" issue in the iOS installed (standalone) app. */
+  overscroll-behavior: none;
 }
 button { font: inherit; cursor: pointer; }
 input, select, textarea {
@@ -41,11 +45,13 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--indigo-300)
 label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
 
 /* Layout */
-.app { max-width: 720px; margin: 0 auto; padding-bottom: 84px; }
+.app { max-width: 720px; margin: 0 auto; padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
 .topbar {
   position: sticky; top: 0; z-index: 10;
   background: linear-gradient(135deg, var(--indigo), var(--indigo-600));
-  color: #fff; padding: 16px 18px; display: flex; align-items: center; gap: 12px;
+  color: #fff; display: flex; align-items: center; gap: 12px;
+  /* Clear the notch / translucent status bar in the iOS installed app. */
+  padding: calc(16px + env(safe-area-inset-top)) 18px 16px;
 }
 .topbar .logo { width: 34px; height: 34px; }
 .topbar h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: .2px; }
@@ -127,6 +133,11 @@ label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px
   display: flex; overflow-x: auto; -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   max-width: 720px; margin: 0 auto;
+  /* Keep sideways swipes inside the nav (don't pan the page) and lift the
+     row above the iPhone home indicator in the installed app. */
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+  padding-bottom: env(safe-area-inset-bottom);
 }
 .nav::-webkit-scrollbar { display: none; }
 .nav button {
