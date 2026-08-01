@@ -18,7 +18,7 @@ export const SUPABASE_URL = "https://windrtkmygtaixtzkfjs.supabase.co";
 export const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndpbmRydGtteWd0YWl4dHprZmpzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0NTc0MTQsImV4cCI6MjEwMTAzMzQxNH0.GOMY1dIq4Wjz8_mP8tvT9jBbTLEg6GHzOKNswyoWUeM";
 
 // App version — bump on each release.
-export const APP_VERSION = "2.5.0";
+export const APP_VERSION = "2.6.0";
 export const APP_DATE = "2026-08-01";
 
 // Public URL members open to use / install the app (used by the invite share).
@@ -39,6 +39,7 @@ export const ROLES = [
   { id: "pastoral_core", name: "Pastoral Core" },
   { id: "senior_pastor", name: "Senior Pastor" },
   { id: "cell_leader",   name: "Domain Cell Leader" },
+  { id: "group_leader",  name: "Connect Group Leader" },
   { id: "member",        name: "Member" }
 ];
 
