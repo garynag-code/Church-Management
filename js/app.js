@@ -67,7 +67,7 @@ const MEMBER_COLUMNS = [
   { label: "Home address", get: x => x.homeAddress }
 ];
 // Resource targeting: any domain cell, a ministry (kids/youth), or the whole church.
-const resTargetOptions = () => [...CELLS.map(c => ({ id: c.id, name: c.name })), { id: "kids", name: "EGC Kingdom Image (Kids)" }, { id: "youth", name: "EGC Youth Ministry" }];
+const resTargetOptions = () => [...CELLS.map(c => ({ id: c.id, name: c.name })), { id: "kids", name: "EGC Kingdom Image (Kids)" }, { id: "youth", name: "EGC Youth Ministry" }, { id: "men", name: "EGC Men" }, { id: "women", name: "EGC Women" }];
 const resTargetName = id => (resTargetOptions().find(x => x.id === id) || {}).name || id;
 const resTarget = r => r.target || (r.kind === "kids" || r.kind === "youth" ? r.kind : "church");
 const resScope = r => r.scope || "global";
@@ -110,7 +110,8 @@ const DEFAULT_CFG = {
 const TOGGLE_TABS = [
   ["upcoming", "Upcoming"], ["resources", "Resources"], ["cells", "Cells"],
   ["members", "Members"], ["groups", "Groups"], ["prayer", "Prayer"],
-  ["testimonies", "My Testimony"], ["kids", "EGC Kids"], ["youth", "EGC Youth"]
+  ["testimonies", "My Testimony"], ["kids", "EGC Kids"], ["youth", "EGC Youth"],
+  ["men", "EGC Men"], ["women", "EGC Women"]
 ];
 let CFG = { ...DEFAULT_CFG };
 async function loadConfig() {
@@ -339,7 +340,9 @@ function shell(inner) {
     ["prayer", "🙏", tabLabel("prayer", "Prayer")],
     ["testimonies", "✨", tabLabel("testimonies", "My Testimony")],
     ["kids", "🧒", tabLabel("kids", "EGC Kids")],
-    ["youth", "🔥", tabLabel("youth", "EGC Youth")]
+    ["youth", "🔥", tabLabel("youth", "EGC Youth")],
+    ["men", "👨", tabLabel("men", "EGC Men")],
+    ["women", "👩", tabLabel("women", "EGC Women")]
   ].filter(([id]) => featureOn(id));
   const membersTab = optional.filter(t => t[0] === "members");
   const mainTabs = optional.filter(t => t[0] !== "members");
@@ -835,7 +838,7 @@ async function resourcesView() {
   //  - local to a domain: only members of that domain (admins/leadership see all)
   const visible = res.filter(r => {
     const t = resTarget(r);
-    if (t === "kids" || t === "youth") return false;
+    if (["kids", "youth", "men", "women"].includes(t)) return false; // these have their own tabs
     if (seeAllMembers()) return true;
     if (resScope(r) === "global" || t === "church") return true;
     return t === u.domainCell;
@@ -882,6 +885,32 @@ async function youthView() {
     <div class="card">
       <h2>EGC Youth Ministry 🔥</h2>
       <p class="sub">Resources, teaching and links for our youth.</p>
+    </div>
+    <div class="card">
+      <h2>Resources</h2>
+      ${res.length ? res.map(resLinkFull).join("") : `<div class="empty">Resources coming soon.</div>`}
+    </div>`;
+}
+
+async function menView() {
+  const res = (await db.list("resources")).filter(r => resTarget(r) === "men").sort((a, b) => b.createdAt - a.createdAt);
+  return `
+    <div class="card">
+      <h2>EGC Men 👨</h2>
+      <p class="sub">Men's ministry — resources, teaching and links.</p>
+    </div>
+    <div class="card">
+      <h2>Resources</h2>
+      ${res.length ? res.map(resLinkFull).join("") : `<div class="empty">Resources coming soon.</div>`}
+    </div>`;
+}
+
+async function womenView() {
+  const res = (await db.list("resources")).filter(r => resTarget(r) === "women").sort((a, b) => b.createdAt - a.createdAt);
+  return `
+    <div class="card">
+      <h2>EGC Women 👩</h2>
+      <p class="sub">Women's ministry — resources, teaching and links.</p>
     </div>
     <div class="card">
       <h2>Resources</h2>
@@ -1401,7 +1430,7 @@ async function adminView() {
 // ---------------------------------------------------------------------------
 // RENDER + EVENT WIRING
 // ---------------------------------------------------------------------------
-const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, members: membersView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, resources: resourcesView, kids: kidsView, youth: youthView, admin: adminView, config: configView, more: moreView };
+const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, members: membersView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, resources: resourcesView, kids: kidsView, youth: youthView, men: menView, women: womenView, admin: adminView, config: configView, more: moreView };
 
 async function render() {
   await auth.refresh();
