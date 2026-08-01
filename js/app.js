@@ -693,6 +693,8 @@ async function moreView() {
       <p class="sub">Mode: <b>${db.mode === "sync" ? "Synced (Supabase free tier)" : "Local (this device)"}</b></p>
       <div class="meta">Ecclesia Glocal Church Family Connect · v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div>
       <div style="height:10px"></div>
+      <button class="btn ghost sm" id="force-update">Check for updates / reload</button>
+      <div class="meta" id="force-update-status" style="margin:6px 0 10px"></div>
       <button class="btn danger sm" id="logout">Sign out</button>
     </div>`;
 }
@@ -1671,6 +1673,26 @@ function wire() {
   };
   const lo = $("#logout");
   if (lo) lo.onclick = async () => { await auth.logout(); boot(); };
+
+  // One-tap escape hatch for a device stuck on an old cached build: drop the
+  // service worker + all caches, then reload fresh from the network. Keeps the
+  // signed-in session and data (those live in Supabase / localStorage).
+  const fu = $("#force-update");
+  if (fu) fu.onclick = async () => {
+    const st = $("#force-update-status");
+    fu.disabled = true; if (st) st.textContent = "Fetching the latest version…";
+    try {
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+    } catch { /* ignore — reload anyway */ }
+    location.reload();
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1721,5 +1743,17 @@ if ("serviceWorker" in navigator) {
       });
     });
   }).catch(() => {});
+
+  // When a freshly-installed worker takes control, apply the update on the
+  // spot so nobody stays stuck on an old build. If the person is mid-form we
+  // hold back and just show the gentle refresh toast instead of interrupting.
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (swRefreshing) return;
+    const el = document.activeElement;
+    if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) { showUpdateToast(); return; }
+    swRefreshing = true;
+    location.reload();
+  });
 }
 boot();
