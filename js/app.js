@@ -171,44 +171,6 @@ function rosterMonthsHtml(roster, groups, withRemove) {
 // Church-level roles see the full member database and every cell/group.
 const seeAllMembers = () => auth.canConfigure(); // admin + pastoral core + senior pastors
 
-// --- Notifications (bell) ---------------------------------------------------
-const notifSeenKey = () => "church.notifSeen." + (auth.current ? auth.current.id : "x");
-const getNotifSeen = () => Number(localStorage.getItem(notifSeenKey()) || 0);
-const markNotifSeen = () => localStorage.setItem(notifSeenKey(), String(Date.now()));
-
-async function buildNotifications() {
-  const u = auth.current;
-  if (!u) return [];
-  const items = [];
-  const today = todayStr();
-  const rel = (scope, cellId) => scope === "global" || cellId === u.domainCell;
-
-  // Fetch everything the bell needs in parallel (one round-trip batch instead
-  // of ~8 sequential ones). The read cache then serves the active view for free.
-  const [announcements, events, groupDuties, roster, notifications, testimonies, groups, visits] =
-    await Promise.all([
-      db.list("announcements"), db.list("events"), db.list("groupDuties"),
-      db.list("roster"), db.list("notifications"), db.list("testimonies"),
-      db.list("connectGroups"), db.list("visits")
-    ]);
-
-  announcements.forEach(a => { if (rel(a.scope, a.cellId)) items.push({ ts: a.createdAt, icon: "📣", text: a.title, sub: a.important ? "Important announcement" : "Announcement", view: "home" }); });
-  events.forEach(e => { if ((e.scope === "global" || e.cellId === u.domainCell) && e.date >= today) items.push({ ts: e.createdAt || evTs(e.date), icon: "📅", text: `${e.title} · ${dayFmt(e.date)}`, sub: "Upcoming event", view: "upcoming" }); });
-  groupDuties.forEach(d => { if (d.memberId === u.id) items.push({ ts: d.createdAt, icon: "🗓️", text: `Duty: ${d.task}`, sub: d.done ? "Completed" : "Assigned to you", view: "groups" }); });
-  roster.forEach(r => { if (r.memberId === u.id) items.push({ ts: r.createdAt, icon: "🛎️", text: `${DUTIES[r.duty] || r.duty} · ${monthLabel(r.month)}`, sub: "Serving roster", view: "upcoming" }); });
-  notifications.forEach(n => { if (n.userId === u.id || n.userId === "all") items.push({ ts: n.createdAt, icon: "🔔", text: n.title + (n.body ? ": " + n.body : ""), sub: "Reminder", view: "more" }); });
-
-  if (auth.canConfigure()) {
-    testimonies.forEach(t => { if (!t.approved) items.push({ ts: t.createdAt, icon: "✨", text: "Testimony awaiting approval", sub: "Needs review", view: "admin" }); });
-  }
-  const myGroupIds = new Set(groups.filter(g => g.leaderId === u.id).map(g => g.id));
-  visits.forEach(v => {
-    if (v.status !== "done" && (auth.canConfigure() || (v.groupIds || []).some(id => myGroupIds.has(id))))
-      items.push({ ts: v.createdAt, icon: "🙋", text: `Visit request: ${v.requesterName}`, sub: "Needs attention", view: auth.canConfigure() ? "admin" : "groups" });
-  });
-
-  return items.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 30);
-}
 // Lightweight audit trail of structural changes (people, groups, cells,
 // leaders, duties, roles). Fire-and-forget — never awaited — so it adds no
 // delay to the action the user just took.
@@ -235,8 +197,6 @@ let editAnn = null;   // announcement id being edited in the Admin hub
 let editEvent = null; // event id being edited in the Admin hub
 let editRes = null;   // resource id being edited in the Admin hub
 let editGroup = null; // connect group id being edited in the Admin hub
-let notifOpen = false;  // notifications dropdown open?
-let notifItems = [];    // computed each render
 
 // ---------------------------------------------------------------------------
 // AUTH SCREEN
@@ -354,34 +314,18 @@ function shell(inner) {
     ["more", "👤", "My Profile"],
     ...(auth.isAdmin() ? [["config", "🔧", "Setup"]] : [])
   ];
-  const unread = notifItems.filter(n => (n.ts || 0) > getNotifSeen()).length;
   $("#root").innerHTML = `
     <div class="topbar">
       <img class="logo" src="${esc(CFG.logoUrl || "./icons/icon.svg")}" alt="" onerror="this.src='./icons/icon.svg'">
       <div style="min-width:0"><h1>${esc(CFG.churchName)}</h1><div style="font-size:10px;opacity:.85">v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div></div>
       <div class="who">${esc(u.name)} ${esc(u.surname)}<br><span class="badge">${esc(roleName(u.role))}</span></div>
-      <button class="bell" id="notif-bell" aria-label="Notifications">🔔${unread ? `<span class="bell-badge">${unread > 9 ? "9+" : unread}</span>` : ""}</button>
     </div>
-    ${notifOpen ? `
-      <div class="notif-panel" id="notif-panel">
-        <div class="notif-head"><b>Notifications</b>${notifItems.length ? `<span class="hint" id="notif-clear">Mark all read</span>` : ""}</div>
-        ${notifItems.length ? notifItems.map(n => `
-          <button class="notif-item" data-notif-view="${n.view}">
-            <span class="ni-ico">${n.icon}</span>
-            <span class="ni-body"><span class="ni-text">${esc(n.text)}</span><span class="meta">${esc(n.sub)}${n.ts ? " · " + fmt(n.ts) : ""}</span></span>
-          </button>`).join("") : `<div class="empty">Nothing new right now.</div>`}
-      </div>` : ""}
     <div class="app"><div class="view" id="view">${inner}</div></div>
     <nav class="nav">
       ${navItems.map(([id, ico, label]) =>
         `<button data-nav="${id}" class="${view === id ? "active" : ""}"><span class="ico">${ico}</span>${label}</button>`).join("")}
     </nav>`;
-  document.querySelectorAll("[data-nav]").forEach(b => b.onclick = () => { notifOpen = false; view = b.dataset.nav; render(); });
-  const bell = $("#notif-bell");
-  if (bell) bell.onclick = () => { notifOpen = !notifOpen; if (notifOpen) markNotifSeen(); render(); };
-  const clr = $("#notif-clear");
-  if (clr) clr.onclick = () => { markNotifSeen(); render(); };
-  document.querySelectorAll("[data-notif-view]").forEach(b => b.onclick = () => { notifOpen = false; view = b.dataset.notifView; render(); });
+  document.querySelectorAll("[data-nav]").forEach(b => b.onclick = () => { view = b.dataset.nav; render(); });
 }
 
 // ---------------------------------------------------------------------------
@@ -1440,7 +1384,6 @@ async function render() {
   if (!["home", "admin", "config", "more"].includes(view) && CFG.features[view] === false) view = "home";
   // Setup is administrators only.
   if (view === "config" && !auth.isAdmin()) view = "home";
-  notifItems = await buildNotifications();
   const inner = await VIEWS[view]();
   shell(inner);
   wire();
