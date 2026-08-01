@@ -136,6 +136,16 @@ async function buildNotifications() {
 
   return items.sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 30);
 }
+// Lightweight audit trail of structural changes (people, groups, cells,
+// leaders, duties, roles). Fire-and-forget — never awaited — so it adds no
+// delay to the action the user just took.
+function logAudit(text) {
+  const u = auth.current;
+  try {
+    db.insert("auditLog", { actorId: u ? u.id : null, actorName: u ? memberName(u) : "", text: String(text) });
+  } catch { /* audit is best-effort */ }
+}
+
 // Who may edit/remove a post (announcement or event): its author, any
 // church-level leader, or the cell leader of a local post's cell.
 function canManagePost(p) {
@@ -496,7 +506,7 @@ async function groupsView() {
       return `
       <div class="card">
         <h2>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h2>
-        <p class="sub">Leader: ${esc(g.leaderName)} · ${memberIds.length} member(s)</p>
+        <p class="sub">Leader: ${g.leaderId && g.leaderName ? esc(g.leaderName) : "No leader yet"} · ${memberIds.length} member(s)</p>
         <div class="row">
           ${g.leaderId === u.id ? `<button class="btn ghost sm" disabled>✓ You lead this group</button>`
             : inGroup ? `<button class="btn ghost sm" data-groupleave="${g.id}">Leave group</button>`
@@ -786,6 +796,7 @@ async function adminView() {
   const categories = (await db.list("resourceCategories")).sort((a, b) => a.name.localeCompare(b.name));
   const st = await getSettings();
   const admins = users.filter(x => x.role === "administrator");
+  const audit = auth.isAdmin() ? (await db.list("auditLog")).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 150) : [];
   const groupLeaderIds = new Set(groups.map(g => g.leaderId).filter(Boolean));
   const leaderMembers = users.filter(x => ["pastoral_core", "senior_pastor", "cell_leader"].includes(x.role) || groupLeaderIds.has(x.id));
   const scopeSel = (val) => `<select name="scope">${auth.canPublishGlobal() ? `<option value="global" ${val === "global" ? "selected" : ""}>Church-wide</option>` : ""}<option value="local" ${val === "local" ? "selected" : ""}>Local (a cell)</option></select>`;
@@ -935,22 +946,29 @@ async function adminView() {
     ${auth.isAdmin() ? `
     <div class="card">
       <h2>📍 Connect groups</h2>
-      <form id="group-form" class="row">
-        <input name="name" placeholder="Group name" required>
-        <input name="area" placeholder="Area / suburb" required>
-        <button class="btn sm" type="submit">Create</button>
+      <form id="group-form">
+        <div class="row">
+          <input name="name" placeholder="Group name" required>
+          <input name="area" placeholder="Area / suburb" required>
+        </div>
+        <label>Leader (appoint now or leave unassigned)</label>
+        <select name="leaderId"><option value="">— No leader yet —</option>${memberOptions}</select>
+        <div style="height:8px"></div>
+        <button class="btn sm" type="submit">Create group</button>
       </form>
       ${groups.length ? groups.map(g => {
         const gm = meetings.filter(m => m.groupId === g.id).sort((a, b) => b.date - a.date);
         if (editGroup === g.id) return `
         <form class="item group-edit-form" data-id="${g.id}">
           <div class="row"><div><label>Name</label><input name="name" value="${esc(g.name)}" required></div><div><label>Area</label><input name="area" value="${esc(g.area)}" required></div></div>
+          <label>Leader</label>
+          <select name="leaderId"><option value="">— No leader —</option>${users.map(m => `<option value="${m.id}" ${g.leaderId === m.id ? "selected" : ""}>${esc(memberName(m))}</option>`).join("")}</select>
           <div class="row" style="margin-top:8px"><button class="btn sm" type="submit">Save</button><button class="btn ghost sm" type="button" data-cancelgroupedit="1">Cancel</button></div>
         </form>`;
         return `
         <div class="item">
           <h3>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h3>
-          <div class="meta">Leader: ${esc(g.leaderName)} · ${(g.members || []).length} member(s)${gm.length ? " · last meeting " + fmt(gm[0].date) : ""}</div>
+          <div class="meta">Leader: ${g.leaderId && g.leaderName ? esc(g.leaderName) : "No leader yet"} · ${(g.members || []).length} member(s)${gm.length ? " · last meeting " + fmt(gm[0].date) : ""}</div>
           <div class="row" style="margin-top:6px">
             <button class="btn ghost sm" data-editgroup="${g.id}">Edit</button>
             <button class="btn ghost sm" data-delgroup="${g.id}">Delete</button>
@@ -1175,6 +1193,16 @@ async function adminView() {
           </div>
           ${x.id === u.id ? `<div class="meta" style="margin-top:6px">(this is you)</div>` : `<button class="btn ghost sm" data-deluser="${x.id}" style="margin-top:6px">Remove from database</button>`}
         </div>`).join("")}
+    </div>
+
+    <div class="card">
+      <h2>🧾 Audit log <span class="pill role">Admin</span></h2>
+      <p class="sub">Recent changes to people, groups, cells, duties and rosters — who did what, and when. Newest first.</p>
+      ${audit.length ? audit.map(a => `
+        <div class="item">
+          <div>${esc(a.text)}</div>
+          <div class="meta">${esc(a.actorName || "Someone")} · ${fmt(a.createdAt)}</div>
+        </div>`).join("") : `<div class="empty">No changes logged yet.</div>`}
     </div>` : ""}`;
 }
 
@@ -1278,10 +1306,11 @@ function wire() {
       const m = await db.get("users", f.memberId);
       await db.insert("roster", { month: f.month, groupId: f.groupId, duty: f.duty, memberId: f.memberId, memberName: m ? memberName(m) : "" });
       await notify("Roster updated", `${DUTIES[f.duty]} · ${monthLabel(f.month)}`);
+      logAudit(`Rostered ${m ? memberName(m) : f.memberId} for ${DUTIES[f.duty] || f.duty} · ${monthLabel(f.month)}`);
       render();
     };
   }
-  v.querySelectorAll("[data-delroster]").forEach(b => b.onclick = async e => { e.preventDefault(); await db.remove("roster", b.dataset.delroster); render(); });
+  v.querySelectorAll("[data-delroster]").forEach(b => b.onclick = async e => { e.preventDefault(); const r = await db.get("roster", b.dataset.delroster); await db.remove("roster", b.dataset.delroster); logAudit(`Removed roster entry${r ? `: ${r.memberName} · ${DUTIES[r.duty] || r.duty} · ${monthLabel(r.month)}` : ""}`); render(); });
 
   // Preaching roster (admin-only card)
   const preachForm = $("#preach-form");
@@ -1309,6 +1338,7 @@ function wire() {
     // Promote to Domain Cell Leader without demoting higher (church-level) roles.
     if (!m.role || m.role === "member") await db.update("users", userId, { role: "cell_leader", domainCell: cellId });
     await notify("Leader assigned", `${memberName(m)} now leads ${cellName(cellId)}.`);
+    logAudit(`Appointed ${memberName(m)} as leader of ${cellName(cellId)} cell`);
     render();
   });
 
@@ -1317,7 +1347,14 @@ function wire() {
   if (gForm) gForm.onsubmit = async e => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
-    await db.insert("connectGroups", { name: f.name, area: f.area, leaderId: u.id, leaderName: `${u.name} ${u.surname}`, members: [] });
+    const leader = f.leaderId ? await db.get("users", f.leaderId) : null;
+    await db.insert("connectGroups", {
+      name: f.name, area: f.area,
+      leaderId: leader ? leader.id : null,
+      leaderName: leader ? memberName(leader) : "",
+      members: leader ? [leader.id] : []
+    });
+    logAudit(`Created connect group "${f.name}"${leader ? ` · leader ${memberName(leader)}` : " (no leader)"}`);
     render();
   };
   // Connect groups: edit name/area + delete
@@ -1326,12 +1363,27 @@ function wire() {
   v.querySelectorAll(".group-edit-form").forEach(f => f.onsubmit = async e => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(f));
-    await db.update("connectGroups", f.dataset.id, { name: d.name, area: d.area });
+    const before = await db.get("connectGroups", f.dataset.id);
+    const leader = d.leaderId ? await db.get("users", d.leaderId) : null;
+    const members = (before && before.members) || [];
+    if (leader && !members.includes(leader.id)) members.push(leader.id); // leader is always in the group
+    await db.update("connectGroups", f.dataset.id, {
+      name: d.name, area: d.area,
+      leaderId: leader ? leader.id : null,
+      leaderName: leader ? memberName(leader) : "",
+      members
+    });
+    const wasLeader = before ? (before.leaderName || "none") : "none";
+    const nowLeader = leader ? memberName(leader) : "none";
+    if (wasLeader !== nowLeader) logAudit(`Changed leader of "${d.name}": ${wasLeader} → ${nowLeader}`);
+    else logAudit(`Edited connect group "${d.name}"`);
     editGroup = null; render();
   });
   v.querySelectorAll("[data-delgroup]").forEach(b => b.onclick = async () => {
     if (!confirm("Delete this connect group? Members will be unassigned from it.")) return;
+    const g = await db.get("connectGroups", b.dataset.delgroup);
     await db.remove("connectGroups", b.dataset.delgroup);
+    logAudit(`Deleted connect group "${g ? g.name : b.dataset.delgroup}"`);
     render();
   });
   // Domain cells: add / rename / remove
@@ -1341,20 +1393,25 @@ function wire() {
     const name = (new FormData(e.target).get("name") || "").toString().trim();
     if (!name) return;
     await db.insert("domainCells", { name, primary: false, order: CELLS.length });
+    logAudit(`Added domain cell "${name}"`);
     render();
   };
   v.querySelectorAll(".cellname-form").forEach(f => f.onsubmit = async e => {
     e.preventDefault();
     const name = (new FormData(f).get("name") || "").toString().trim();
     if (!name) return;
+    const before = CELLS.find(c => c.id === f.dataset.id);
     await db.update("domainCells", f.dataset.id, { name });
+    if (!before || before.name !== name) logAudit(`Renamed domain cell "${before ? before.name : f.dataset.id}" → "${name}"`);
     render();
   });
   v.querySelectorAll("[data-delcell]").forEach(b => b.onclick = async () => {
     const id = b.dataset.delcell;
     if (!confirm("Remove this domain cell? Its members will be moved to Church.")) return;
+    const cell = CELLS.find(c => c.id === id);
     for (const m of (await db.list("users")).filter(x => x.domainCell === id)) await db.update("users", m.id, { domainCell: "church" });
     await db.remove("domainCells", id);
+    logAudit(`Removed domain cell "${cell ? cell.name : id}"`);
     render();
   });
   // Groups: add an existing member (linked to the member database)
@@ -1367,6 +1424,8 @@ function wire() {
     const members = g.members || [];
     if (!members.includes(userId)) members.push(userId);
     await db.update("connectGroups", groupId, { members });
+    const m = await db.get("users", userId);
+    logAudit(`Added ${m ? memberName(m) : userId} to group "${g.name}"`);
     render();
   });
   v.querySelectorAll("[data-meeting]").forEach(b => b.onclick = async () => {
@@ -1427,15 +1486,21 @@ function wire() {
     await db.insert("groupDuties", { groupId: f.dataset.group, memberId: d.memberId, memberName: m ? memberName(m) : "", date: d.date, task: d.task, done: false, assignedBy: u.id });
     await db.insert("notifications", { userId: d.memberId, title: "New duty assigned", body: `${d.task}${d.date ? " (" + d.date + ")" : ""}` });
     await notify("Duty assigned", d.task);
+    logAudit(`Assigned duty "${d.task}" to ${m ? memberName(m) : d.memberId}`);
     render();
   });
   v.querySelectorAll("[data-dutytoggle]").forEach(b => b.onclick = async () => {
     const d = await db.get("groupDuties", b.dataset.dutytoggle);
-    if (d) await db.update("groupDuties", d.id, { done: !d.done });
+    if (d) {
+      await db.update("groupDuties", d.id, { done: !d.done });
+      logAudit(`Marked duty "${d.task}" for ${d.memberName || d.memberId} as ${!d.done ? "done" : "not done"}`);
+    }
     render();
   });
   v.querySelectorAll("[data-dutydel]").forEach(b => b.onclick = async () => {
+    const d = await db.get("groupDuties", b.dataset.dutydel);
     await db.remove("groupDuties", b.dataset.dutydel);
+    logAudit(`Removed duty "${d ? d.task : b.dataset.dutydel}"${d && d.memberName ? ` from ${d.memberName}` : ""}`);
     render();
   });
 
@@ -1548,12 +1613,16 @@ function wire() {
     render();
   };
   v.querySelectorAll("[data-role-for]").forEach(sel => sel.onchange = async () => {
+    const m = await db.get("users", sel.dataset.roleFor);
     await db.update("users", sel.dataset.roleFor, { role: sel.value });
+    logAudit(`Changed ${m ? memberName(m) : sel.dataset.roleFor}'s role to ${roleName(sel.value)}`);
     render();
   });
   // Reallocate a member to a different domain cell
   v.querySelectorAll("[data-cell-for]").forEach(sel => sel.onchange = async () => {
+    const m = await db.get("users", sel.dataset.cellFor);
     await db.update("users", sel.dataset.cellFor, { domainCell: sel.value });
+    logAudit(`Moved ${m ? memberName(m) : sel.dataset.cellFor} to ${cellName(sel.value)} cell`);
     render();
   });
   // Remove a member from the database (with cleanup of leadership + group membership)
@@ -1561,11 +1630,13 @@ function wire() {
     const id = b.dataset.deluser;
     if (id === u.id) return;
     if (!confirm("Remove this person from the member database? This cannot be undone.")) return;
+    const person = await db.get("users", id);
     for (const l of (await db.list("cellLeaders")).filter(x => x.userId === id)) await db.remove("cellLeaders", l.id);
     for (const g of await db.list("connectGroups")) {
       if ((g.members || []).includes(id)) await db.update("connectGroups", g.id, { members: g.members.filter(m => m !== id) });
     }
     await db.remove("users", id);
+    logAudit(`Removed ${person ? memberName(person) : id} from the member database`);
     render();
   });
   // Remove a member from a connect group
@@ -1574,6 +1645,8 @@ function wire() {
     const [gid, mid] = b.dataset.groupremove.split(":");
     const g = await db.get("connectGroups", gid);
     if (g) await db.update("connectGroups", gid, { members: (g.members || []).filter(m => m !== mid) });
+    const m = await db.get("users", mid);
+    logAudit(`Removed ${m ? memberName(m) : mid} from group "${g ? g.name : gid}"`);
     render();
   });
   const pfForm = $("#profile-form");
