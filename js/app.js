@@ -347,9 +347,9 @@ function shell(inner) {
     ["home", "🏠", tabLabel("home", "Home")],
     ...mainTabs,
     ...(auth.canLeadCell() ? [["admin", "🛠️", "Admin"]] : []),
-    ...(auth.isAdmin() ? [["config", "🔧", "Setup"]] : []),
     ...membersTab,
-    ["more", "⚙️", "More"]
+    ["more", "⚙️", "More"],
+    ...(auth.isAdmin() ? [["config", "🔧", "Setup"]] : [])
   ];
   const unread = notifItems.filter(n => (n.ts || 0) > getNotifSeen()).length;
   $("#root").innerHTML = `
