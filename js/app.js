@@ -347,6 +347,7 @@ function shell(inner) {
     ["home", "🏠", tabLabel("home", "Home")],
     ...mainTabs,
     ...(auth.canLeadCell() ? [["admin", "🛠️", "Admin"]] : []),
+    ...(auth.isAdmin() ? [["config", "🔧", "Setup"]] : []),
     ...membersTab,
     ["more", "⚙️", "More"]
   ];
@@ -886,7 +887,160 @@ async function youthView() {
 }
 
 // ---------------------------------------------------------------------------
-// ADMIN — the single hub for creating / managing everything
+// SETUP — configuration (branding, roles, cells, groups, duty types).
+// Kept separate from the Admin hub, which is for day-to-day activities.
+// ---------------------------------------------------------------------------
+async function configView() {
+  const u = auth.current;
+  if (!auth.isAdmin()) return `<div class="card"><div class="empty">Configuration is available to administrators.</div></div>`;
+  const users = await db.list("users");
+  const leaders = await db.list("cellLeaders");
+  const groups = (await db.list("connectGroups")).sort((a, b) => b.createdAt - a.createdAt);
+  const meetings = await db.list("meetings");
+  const builtinRoleIds = ROLES.map(r => r.id);
+  const customRolesList = ROLES_ALL.filter(r => !builtinRoleIds.includes(r.id)).map(r => ({ ...r, tier: auth.roleTiers[r.id] || "member" }));
+  const memberOptions = users.map(m => `<option value="${m.id}">${esc(memberName(m))}</option>`).join("");
+
+  return `
+    <div class="card">
+      <h2>Setup ⚙️</h2>
+      <p class="sub">Configure how the app is structured — branding, tabs, roles, cells, groups and duty types. Day-to-day activities live in the Admin tab.</p>
+    </div>
+
+    <div class="card">
+      <h2>🎨 Branding</h2>
+      <p class="sub">Name, tagline, colour and logo. Applied everywhere for everyone.</p>
+      <form id="brand-form">
+        <label>Church / app name</label><input name="churchName" value="${esc(CFG.churchName)}">
+        <label>Tagline</label><input name="tagline" value="${esc(CFG.tagline)}">
+        <div class="row">
+          <div><label>Brand colour (hex)</label><input name="brandColor" placeholder="#2B2D8E" value="${esc(CFG.brandColor)}"></div>
+          <div><label>Logo URL (optional)</label><input name="logoUrl" type="url" placeholder="https://…" value="${esc(CFG.logoUrl)}"></div>
+        </div>
+        <div style="height:8px"></div>
+        <button class="btn" type="submit">Save branding</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>🧭 Tabs & ministries</h2>
+      <p class="sub">Untick to hide a tab; type a new name to rename it.</p>
+      <form id="tabs-form">
+        ${TOGGLE_TABS.map(([id, def]) => `
+          <div class="item">
+            <label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" name="on_${id}" ${featureOn(id) ? "checked" : ""} style="width:auto"> <b>${esc(def)}</b></label>
+            <input name="label_${id}" value="${esc(tabLabel(id, def))}" placeholder="Rename ${esc(def)}" style="margin-top:6px">
+          </div>`).join("")}
+        <div style="height:8px"></div>
+        <button class="btn" type="submit">Save tabs & features</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>🧑‍🤝‍🧑 Custom roles</h2>
+      <p class="sub">Add roles beyond the built-in ones and choose what they can do.</p>
+      <form id="role-form">
+        <div class="row">
+          <div><label>Role name</label><input name="name" placeholder="e.g. Worship Leader" required></div>
+          <div><label>Can do</label><select name="tier">${ROLE_TIERS.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></div>
+        </div>
+        <div style="height:8px"></div>
+        <button class="btn gold sm" type="submit">Add role</button>
+      </form>
+      ${customRolesList.length ? customRolesList.map(r => `
+        <div class="item">
+          <h3>${esc(r.name)} <span class="pill role">${esc(roleTierName(r.tier))}</span></h3>
+          <button class="btn ghost sm" data-delrole="${esc(r.id)}" style="margin-top:6px">Remove role</button>
+        </div>`).join("") : `<div class="meta" style="margin-top:6px">No custom roles yet.</div>`}
+    </div>
+
+    <div class="card">
+      <h2>🌐 Domain cells</h2>
+      <p class="sub">Rename or add domain cells. The primary (Church) can't be removed.</p>
+      <form id="addcell-form" class="row">
+        <input name="name" placeholder="New domain cell name" required>
+        <button class="btn sm" type="submit">Add cell</button>
+      </form>
+      ${CELLS.map(c => `
+        <form class="item cellname-form" data-id="${c.id}">
+          <div class="row">
+            <input name="name" value="${esc(c.name)}" required>
+            <button class="btn sm" type="submit">Save</button>
+            ${c.primary ? `<button class="btn ghost sm" type="button" disabled>Primary</button>` : `<button class="btn ghost sm" type="button" data-delcell="${c.id}">Remove</button>`}
+          </div>
+        </form>`).join("")}
+    </div>
+
+    <div class="card">
+      <h2>👑 Assign domain cell leaders</h2>
+      ${CELLS.map(c => {
+        const cl = leaders.filter(l => l.cellId === c.id);
+        return `
+        <div class="item">
+          <h3>${esc(c.name)}</h3>
+          <div class="meta">${cl.length ? "Leaders: " + cl.map(l => esc(l.name)).join(", ") : "No leaders yet"}</div>
+          <form class="row addleader-form" data-cell="${c.id}" style="margin-top:6px">
+            <select name="userId" required><option value="">Select a member…</option>${memberOptions}</select>
+            <button class="btn gold sm" type="submit">Make leader</button>
+          </form>
+        </div>`;
+      }).join("")}
+    </div>
+
+    <div class="card">
+      <h2>📍 Connect groups</h2>
+      <form id="group-form">
+        <div class="row">
+          <input name="name" placeholder="Group name" required>
+          <input name="area" placeholder="Area / suburb" required>
+        </div>
+        <label>Leader (appoint now or leave unassigned)</label>
+        <select name="leaderId"><option value="">— No leader yet —</option>${memberOptions}</select>
+        <div style="height:8px"></div>
+        <button class="btn sm" type="submit">Create group</button>
+      </form>
+      ${groups.length ? groups.map(g => {
+        const gm = meetings.filter(m => m.groupId === g.id).sort((a, b) => b.date - a.date);
+        if (editGroup === g.id) return `
+        <form class="item group-edit-form" data-id="${g.id}">
+          <div class="row"><div><label>Name</label><input name="name" value="${esc(g.name)}" required></div><div><label>Area</label><input name="area" value="${esc(g.area)}" required></div></div>
+          <label>Leader</label>
+          <select name="leaderId"><option value="">— No leader —</option>${users.map(m => `<option value="${m.id}" ${g.leaderId === m.id ? "selected" : ""}>${esc(memberName(m))}</option>`).join("")}</select>
+          <div class="row" style="margin-top:8px"><button class="btn sm" type="submit">Save</button><button class="btn ghost sm" type="button" data-cancelgroupedit="1">Cancel</button></div>
+        </form>`;
+        return `
+        <div class="item">
+          <h3>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h3>
+          <div class="meta">Leader: ${g.leaderId && g.leaderName ? esc(g.leaderName) : "No leader yet"} · ${(g.members || []).length} member(s)${gm.length ? " · last meeting " + fmt(gm[0].date) : ""}</div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn ghost sm" data-editgroup="${g.id}">Edit</button>
+            <button class="btn ghost sm" data-delgroup="${g.id}">Delete</button>
+            <button class="btn ghost sm" data-meeting="${g.id}">+ Meeting</button>
+            <button class="btn ghost sm" data-feedback="${g.id}">+ Feedback</button>
+          </div>
+          <form class="row addmember-form" data-group="${g.id}" style="margin-top:6px">
+            <select name="userId" required><option value="">Add a member…</option>${memberOptions}</select>
+            <button class="btn gold sm" type="submit">Add</button>
+          </form>
+          ${(g.members || []).length ? `<div class="meta" style="margin-top:6px">Members: ${(g.members || []).map(mid => { const m = users.find(x => x.id === mid); return m ? `${esc(memberName(m))} <a href="#" data-groupremove="${g.id}:${mid}" title="remove from group" style="color:var(--danger);text-decoration:none">✕</a>` : ""; }).filter(Boolean).join(" · ")}</div>` : ""}
+        </div>`;
+      }).join("") : `<div class="empty">No connect groups yet.</div>`}
+    </div>
+
+    <div class="card">
+      <h2>🗓️ Serving duty types</h2>
+      <p class="sub">The duties admins assign on the serving roster (in the Admin tab).</p>
+      <form id="dutytype-form" class="row">
+        <input name="name" placeholder="Add a duty type (e.g. Welcoming)" required>
+        <button class="btn sm" type="submit">Add</button>
+      </form>
+      <div class="meta" style="margin-top:6px">${Object.entries(DUTIES).map(([k, l]) => `${esc(l)} <a href="#" data-delduty="${esc(k)}" title="remove" style="color:var(--danger);text-decoration:none">✕</a>`).join(" · ") || "No duty types."}</div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// ADMIN — the hub for day-to-day activities (announcements, events, rosters,
+// approvals, the member database, exports and the audit log).
 // ---------------------------------------------------------------------------
 async function adminView() {
   const u = auth.current;
@@ -918,48 +1072,8 @@ async function adminView() {
   return `
     <div class="card">
       <h2>Admin 🛠️</h2>
-      <p class="sub">Create and manage everything here. The other tabs stay clean for viewing.</p>
+      <p class="sub">Day-to-day activities — announcements, events, rosters, approvals, the member database and reports. Structure and branding live in the <b>Setup</b> tab.</p>
     </div>
-
-    ${auth.isAdmin() ? `
-    <div class="card">
-      <h2>⚙️ Church configuration <span class="pill role">Admin</span></h2>
-      <p class="sub">Branding, tab names and which features members see. Changes apply to everyone.</p>
-      <form id="brand-form">
-        <label>Church / app name</label><input name="churchName" value="${esc(CFG.churchName)}">
-        <label>Tagline</label><input name="tagline" value="${esc(CFG.tagline)}">
-        <div class="row">
-          <div><label>Brand colour (hex)</label><input name="brandColor" placeholder="#2B2D8E" value="${esc(CFG.brandColor)}"></div>
-          <div><label>Logo URL (optional)</label><input name="logoUrl" type="url" placeholder="https://…" value="${esc(CFG.logoUrl)}"></div>
-        </div>
-        <div style="height:8px"></div>
-        <button class="btn" type="submit">Save branding</button>
-      </form>
-      <div class="meta" style="margin-top:14px"><b>Tabs & ministries</b> — untick to hide a tab; type a new name to rename it.</div>
-      <form id="tabs-form">
-        ${TOGGLE_TABS.map(([id, def]) => `
-          <div class="item">
-            <label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" name="on_${id}" ${featureOn(id) ? "checked" : ""} style="width:auto"> <b>${esc(def)}</b></label>
-            <input name="label_${id}" value="${esc(tabLabel(id, def))}" placeholder="Rename ${esc(def)}" style="margin-top:6px">
-          </div>`).join("")}
-        <div style="height:8px"></div>
-        <button class="btn" type="submit">Save tabs & features</button>
-      </form>
-      <div class="meta" style="margin-top:14px"><b>Custom roles</b> — add roles beyond the built-in ones and choose what they can do.</div>
-      <form id="role-form">
-        <div class="row">
-          <div><label>Role name</label><input name="name" placeholder="e.g. Worship Leader" required></div>
-          <div><label>Can do</label><select name="tier">${ROLE_TIERS.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></div>
-        </div>
-        <div style="height:8px"></div>
-        <button class="btn gold sm" type="submit">Add role</button>
-      </form>
-      ${customRolesList.length ? customRolesList.map(r => `
-        <div class="item">
-          <h3>${esc(r.name)} <span class="pill role">${esc(roleTierName(r.tier))}</span></h3>
-          <button class="btn ghost sm" data-delrole="${esc(r.id)}" style="margin-top:6px">Remove role</button>
-        </div>`).join("") : `<div class="meta" style="margin-top:6px">No custom roles yet.</div>`}
-    </div>` : ""}
 
     <div class="card">
       <h2>📣 Post an announcement</h2>
@@ -1059,81 +1173,6 @@ async function adminView() {
         </div>`).join("") : `<div class="empty">No activities you can manage.</div>`}
     </div>
 
-    ${auth.isAdmin() ? `
-    <div class="card">
-      <h2>🌐 Domain cells</h2>
-      <p class="sub">Rename or add domain cells. The primary (Church) can't be removed.</p>
-      <form id="addcell-form" class="row">
-        <input name="name" placeholder="New domain cell name" required>
-        <button class="btn sm" type="submit">Add cell</button>
-      </form>
-      ${CELLS.map(c => `
-        <form class="item cellname-form" data-id="${c.id}">
-          <div class="row">
-            <input name="name" value="${esc(c.name)}" required>
-            <button class="btn sm" type="submit">Save</button>
-            ${c.primary ? `<button class="btn ghost sm" type="button" disabled>Primary</button>` : `<button class="btn ghost sm" type="button" data-delcell="${c.id}">Remove</button>`}
-          </div>
-        </form>`).join("")}
-    </div>
-
-    <div class="card">
-      <h2>👑 Assign domain cell leaders</h2>
-      ${CELLS.map(c => {
-        const cl = leaders.filter(l => l.cellId === c.id);
-        return `
-        <div class="item">
-          <h3>${esc(c.name)}</h3>
-          <div class="meta">${cl.length ? "Leaders: " + cl.map(l => esc(l.name)).join(", ") : "No leaders yet"}</div>
-          <form class="row addleader-form" data-cell="${c.id}" style="margin-top:6px">
-            <select name="userId" required><option value="">Select a member…</option>${memberOptions}</select>
-            <button class="btn gold sm" type="submit">Make leader</button>
-          </form>
-        </div>`;
-      }).join("")}
-    </div>` : ""}
-
-    ${auth.isAdmin() ? `
-    <div class="card">
-      <h2>📍 Connect groups</h2>
-      <form id="group-form">
-        <div class="row">
-          <input name="name" placeholder="Group name" required>
-          <input name="area" placeholder="Area / suburb" required>
-        </div>
-        <label>Leader (appoint now or leave unassigned)</label>
-        <select name="leaderId"><option value="">— No leader yet —</option>${memberOptions}</select>
-        <div style="height:8px"></div>
-        <button class="btn sm" type="submit">Create group</button>
-      </form>
-      ${groups.length ? groups.map(g => {
-        const gm = meetings.filter(m => m.groupId === g.id).sort((a, b) => b.date - a.date);
-        if (editGroup === g.id) return `
-        <form class="item group-edit-form" data-id="${g.id}">
-          <div class="row"><div><label>Name</label><input name="name" value="${esc(g.name)}" required></div><div><label>Area</label><input name="area" value="${esc(g.area)}" required></div></div>
-          <label>Leader</label>
-          <select name="leaderId"><option value="">— No leader —</option>${users.map(m => `<option value="${m.id}" ${g.leaderId === m.id ? "selected" : ""}>${esc(memberName(m))}</option>`).join("")}</select>
-          <div class="row" style="margin-top:8px"><button class="btn sm" type="submit">Save</button><button class="btn ghost sm" type="button" data-cancelgroupedit="1">Cancel</button></div>
-        </form>`;
-        return `
-        <div class="item">
-          <h3>${esc(g.name)} <span class="pill local">📍 ${esc(g.area)}</span></h3>
-          <div class="meta">Leader: ${g.leaderId && g.leaderName ? esc(g.leaderName) : "No leader yet"} · ${(g.members || []).length} member(s)${gm.length ? " · last meeting " + fmt(gm[0].date) : ""}</div>
-          <div class="row" style="margin-top:6px">
-            <button class="btn ghost sm" data-editgroup="${g.id}">Edit</button>
-            <button class="btn ghost sm" data-delgroup="${g.id}">Delete</button>
-            <button class="btn ghost sm" data-meeting="${g.id}">+ Meeting</button>
-            <button class="btn ghost sm" data-feedback="${g.id}">+ Feedback</button>
-          </div>
-          <form class="row addmember-form" data-group="${g.id}" style="margin-top:6px">
-            <select name="userId" required><option value="">Add a member…</option>${memberOptions}</select>
-            <button class="btn gold sm" type="submit">Add</button>
-          </form>
-          ${(g.members || []).length ? `<div class="meta" style="margin-top:6px">Members: ${(g.members || []).map(mid => { const m = users.find(x => x.id === mid); return m ? `${esc(memberName(m))} <a href="#" data-groupremove="${g.id}:${mid}" title="remove from group" style="color:var(--danger);text-decoration:none">✕</a>` : ""; }).filter(Boolean).join(" · ")}</div>` : ""}
-        </div>`;
-      }).join("") : `<div class="empty">No connect groups yet.</div>`}
-    </div>` : ""}
-
     ${auth.canConfigure() ? `
     <div class="card">
       <h2>✨ Testimonies awaiting approval</h2>
@@ -1166,16 +1205,7 @@ async function adminView() {
     ${auth.canConfigure() ? `
     <div class="card">
       <h2>🗓️ Serving roster</h2>
-      <p class="sub">Pick the month and the connect group on ministry, then assign its members to the serving duties below.</p>
-      ${auth.isAdmin() ? `
-      <div class="notice" style="margin-bottom:12px">
-        <b>⚙️ Configure duty types</b>
-        <form id="dutytype-form" class="row" style="margin-top:8px">
-          <input name="name" placeholder="Add a duty type (e.g. Welcoming)" required>
-          <button class="btn sm" type="submit">Add</button>
-        </form>
-        <div class="meta" style="margin-top:6px">${Object.entries(DUTIES).map(([k, l]) => `${esc(l)} <a href="#" data-delduty="${esc(k)}" title="remove" style="color:var(--danger);text-decoration:none">✕</a>`).join(" · ") || "No duty types."}</div>
-      </div>` : ""}
+      <p class="sub">Pick the month and the connect group on ministry, then assign its members to the serving duties. Manage the duty types in the Setup tab.</p>
       <form id="roster-form">
         <div class="row">
           <div><label>Month</label><input name="month" type="month" value="${thisMonth()}" required></div>
@@ -1368,14 +1398,16 @@ async function adminView() {
 // ---------------------------------------------------------------------------
 // RENDER + EVENT WIRING
 // ---------------------------------------------------------------------------
-const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, members: membersView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, resources: resourcesView, kids: kidsView, youth: youthView, admin: adminView, more: moreView };
+const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, members: membersView, groups: groupsView, prayer: prayerView, testimonies: testimoniesView, resources: resourcesView, kids: kidsView, youth: youthView, admin: adminView, config: configView, more: moreView };
 
 async function render() {
   await auth.refresh();
   await Promise.all([loadCells(), loadDuties(), loadConfig()]);
   applyBrand();
   // If the current tab was just hidden by config, fall back to Home.
-  if (!["home", "admin", "more"].includes(view) && CFG.features[view] === false) view = "home";
+  if (!["home", "admin", "config", "more"].includes(view) && CFG.features[view] === false) view = "home";
+  // Setup is administrators only.
+  if (view === "config" && !auth.isAdmin()) view = "home";
   notifItems = await buildNotifications();
   const inner = await VIEWS[view]();
   shell(inner);
