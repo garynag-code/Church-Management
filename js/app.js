@@ -86,6 +86,49 @@ async function loadDuties() {
     DUTIES = { ...DEFAULT_DUTIES };
   }
 }
+
+// Admin-configurable app settings (branding, tab labels, feature toggles).
+// Loaded into CFG on each render so the shell/nav/views can read it synchronously.
+const DEFAULT_CFG = {
+  churchName: "EGC Family Connect",
+  tagline: "Ecclesia Glocal Church Family Connect",
+  brandColor: "",
+  logoUrl: "",
+  features: {},   // { members:false, kids:false, ... } — undefined/true means shown
+  tabLabels: {}   // { kids:"…", youth:"…", groups:"…" }
+};
+// Optional tabs an admin can hide or rename (Home/Admin/More are always on).
+const TOGGLE_TABS = [
+  ["upcoming", "Upcoming"], ["resources", "Resources"], ["cells", "Cells"],
+  ["members", "Members"], ["groups", "Groups"], ["prayer", "Prayer"],
+  ["testimonies", "My Testimony"], ["kids", "EGC Kids"], ["youth", "EGC Youth"]
+];
+let CFG = { ...DEFAULT_CFG };
+async function loadConfig() {
+  const st = await getSettings();
+  CFG = {
+    churchName: (st.churchName || "").trim() || DEFAULT_CFG.churchName,
+    tagline: (st.tagline || "").trim() || DEFAULT_CFG.tagline,
+    brandColor: (st.brandColor || "").trim(),
+    logoUrl: (st.logoUrl || "").trim(),
+    features: st.features && typeof st.features === "object" ? st.features : {},
+    tabLabels: st.tabLabels && typeof st.tabLabels === "object" ? st.tabLabels : {}
+  };
+}
+// A feature/tab is on unless explicitly turned off. Home/Admin/More are never toggleable.
+const featureOn = key => CFG.features[key] !== false;
+const tabLabel = (key, def) => (CFG.tabLabels[key] || "").trim() || def;
+// Apply the brand colour (if any) to the CSS variables the theme uses.
+function applyBrand() {
+  const root = document.documentElement;
+  if (CFG.brandColor) {
+    root.style.setProperty("--indigo", CFG.brandColor);
+    root.style.setProperty("--indigo-600", CFG.brandColor);
+  } else {
+    root.style.removeProperty("--indigo");
+    root.style.removeProperty("--indigo-600");
+  }
+}
 const monthLabel = ym => { if (!ym) return ""; const [y, m] = ym.split("-"); return `${MONTHS[(+m) - 1] || ""} ${y}`; };
 const thisMonth = () => todayStr().slice(0, 7);
 // Shared renderer for the serving roster, grouped by month.
@@ -184,9 +227,10 @@ function authScreen() {
   $("#root").innerHTML = `
     <div class="auth-wrap">
       <div class="auth-hero">
-        <img src="./icons/logo.jpg" alt="Ecclesia Glocal Church" style="width:280px;max-width:82%;height:auto">
-        <h1 style="font-size:18px;margin:8px 0 2px">Family Connect</h1>
-        <small class="hint">${isSyncEnabled() ? "Synced across your church" : "Running free · local mode"}</small>
+        <img src="${esc(CFG.logoUrl || "./icons/logo.jpg")}" alt="${esc(CFG.churchName)}" style="width:280px;max-width:82%;height:auto" onerror="this.src='./icons/logo.jpg'">
+        <h1 style="font-size:18px;margin:8px 0 2px">${esc(CFG.churchName)}</h1>
+        <small class="hint">${esc(CFG.tagline)}</small>
+        <div class="hint">${isSyncEnabled() ? "Synced across your church" : "Running free · local mode"}</div>
         <div class="hint" style="margin-top:4px">v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div>
       </div>
       <div class="tabs">
@@ -266,18 +310,33 @@ function authScreen() {
 // ---------------------------------------------------------------------------
 function shell(inner) {
   const u = auth.current;
+  // Optional tabs honour admin feature toggles and custom labels; Home, Admin
+  // and More are always available.
+  const optional = [
+    ["upcoming", "📅", tabLabel("upcoming", "Upcoming")],
+    ["resources", "📚", tabLabel("resources", "Resources")],
+    ["cells", "🌐", tabLabel("cells", "Cells")],
+    ["members", "👥", tabLabel("members", "Members")],
+    ["groups", "📍", tabLabel("groups", "Groups")],
+    ["prayer", "🙏", tabLabel("prayer", "Prayer")],
+    ["testimonies", "✨", tabLabel("testimonies", "My Testimony")],
+    ["kids", "🧒", tabLabel("kids", "EGC Kids")],
+    ["youth", "🔥", tabLabel("youth", "EGC Youth")]
+  ].filter(([id]) => featureOn(id));
+  const membersTab = optional.filter(t => t[0] === "members");
+  const mainTabs = optional.filter(t => t[0] !== "members");
   const navItems = [
-    ["home", "🏠", "Home"], ["upcoming", "📅", "Upcoming"], ["resources", "📚", "Resources"],
-    ["cells", "🌐", "Cells"], ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "My Testimony"],
-    ["kids", "🧒", "EGC Kids"], ["youth", "🔥", "EGC Youth"],
+    ["home", "🏠", tabLabel("home", "Home")],
+    ...mainTabs,
     ...(auth.canLeadCell() ? [["admin", "🛠️", "Admin"]] : []),
-    ["members", "👥", "Members"], ["more", "⚙️", "More"]
+    ...membersTab,
+    ["more", "⚙️", "More"]
   ];
   const unread = notifItems.filter(n => (n.ts || 0) > getNotifSeen()).length;
   $("#root").innerHTML = `
     <div class="topbar">
-      <img class="logo" src="./icons/icon.svg" alt="">
-      <div style="min-width:0"><h1>EGC Family Connect</h1><div style="font-size:10px;opacity:.85">v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div></div>
+      <img class="logo" src="${esc(CFG.logoUrl || "./icons/icon.svg")}" alt="" onerror="this.src='./icons/icon.svg'">
+      <div style="min-width:0"><h1>${esc(CFG.churchName)}</h1><div style="font-size:10px;opacity:.85">v${esc(APP_VERSION)} · ${esc(APP_DATE)}</div></div>
       <div class="who">${esc(u.name)} ${esc(u.surname)}<br><span class="badge">${esc(roleName(u.role))}</span></div>
       <button class="bell" id="notif-bell" aria-label="Notifications">🔔${unread ? `<span class="bell-badge">${unread > 9 ? "9+" : unread}</span>` : ""}</button>
     </div>
@@ -840,6 +899,32 @@ async function adminView() {
       <p class="sub">Create and manage everything here. The other tabs stay clean for viewing.</p>
     </div>
 
+    ${auth.isAdmin() ? `
+    <div class="card">
+      <h2>⚙️ Church configuration <span class="pill role">Admin</span></h2>
+      <p class="sub">Branding, tab names and which features members see. Changes apply to everyone.</p>
+      <form id="brand-form">
+        <label>Church / app name</label><input name="churchName" value="${esc(CFG.churchName)}">
+        <label>Tagline</label><input name="tagline" value="${esc(CFG.tagline)}">
+        <div class="row">
+          <div><label>Brand colour (hex)</label><input name="brandColor" placeholder="#2B2D8E" value="${esc(CFG.brandColor)}"></div>
+          <div><label>Logo URL (optional)</label><input name="logoUrl" type="url" placeholder="https://…" value="${esc(CFG.logoUrl)}"></div>
+        </div>
+        <div style="height:8px"></div>
+        <button class="btn" type="submit">Save branding</button>
+      </form>
+      <div class="meta" style="margin-top:14px"><b>Tabs & ministries</b> — untick to hide a tab; type a new name to rename it.</div>
+      <form id="tabs-form">
+        ${TOGGLE_TABS.map(([id, def]) => `
+          <div class="item">
+            <label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" name="on_${id}" ${featureOn(id) ? "checked" : ""} style="width:auto"> <b>${esc(def)}</b></label>
+            <input name="label_${id}" value="${esc(tabLabel(id, def))}" placeholder="Rename ${esc(def)}" style="margin-top:6px">
+          </div>`).join("")}
+        <div style="height:8px"></div>
+        <button class="btn" type="submit">Save tabs & features</button>
+      </form>
+    </div>` : ""}
+
     <div class="card">
       <h2>📣 Post an announcement</h2>
       <form id="ann-form">
@@ -1251,7 +1336,10 @@ const VIEWS = { home: homeView, upcoming: upcomingView, cells: cellsView, member
 
 async function render() {
   await auth.refresh();
-  await Promise.all([loadCells(), loadDuties()]);
+  await Promise.all([loadCells(), loadDuties(), loadConfig()]);
+  applyBrand();
+  // If the current tab was just hidden by config, fall back to Home.
+  if (!["home", "admin", "more"].includes(view) && CFG.features[view] === false) view = "home";
   notifItems = await buildNotifications();
   const inner = await VIEWS[view]();
   shell(inner);
@@ -1349,6 +1437,33 @@ function wire() {
     };
   }
   v.querySelectorAll("[data-delroster]").forEach(b => b.onclick = async e => { e.preventDefault(); const r = await db.get("roster", b.dataset.delroster); await db.remove("roster", b.dataset.delroster); logAudit(`Removed roster entry${r ? `: ${r.memberName} · ${DUTIES[r.duty] || r.duty} · ${monthLabel(r.month)}` : ""}`); render(); });
+  // Church configuration: branding
+  const brandForm = $("#brand-form");
+  if (brandForm) brandForm.onsubmit = async e => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target));
+    await saveSettings({
+      churchName: (f.churchName || "").trim(), tagline: (f.tagline || "").trim(),
+      brandColor: (f.brandColor || "").trim(), logoUrl: (f.logoUrl || "").trim()
+    });
+    logAudit("Updated church branding");
+    render();
+  };
+  // Church configuration: tab visibility + labels
+  const tabsForm = $("#tabs-form");
+  if (tabsForm) tabsForm.onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const features = {}, tabLabels = {};
+    for (const [id, def] of TOGGLE_TABS) {
+      features[id] = fd.get("on_" + id) != null;
+      const lbl = (fd.get("label_" + id) || "").toString().trim();
+      if (lbl && lbl !== def) tabLabels[id] = lbl;
+    }
+    await saveSettings({ features, tabLabels });
+    logAudit("Updated tabs & feature visibility");
+    render();
+  };
   // Configure serving-duty types (admin)
   const dtForm = $("#dutytype-form");
   if (dtForm) dtForm.onsubmit = async e => {
@@ -1835,6 +1950,8 @@ function wire() {
 // BOOT
 async function boot() {
   await auth.init();
+  await loadConfig();
+  applyBrand();
   if (auth.current) { view = "home"; render(); }
   else authScreen();
 }
