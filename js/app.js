@@ -246,11 +246,11 @@ function authScreen() {
 function shell(inner) {
   const u = auth.current;
   const navItems = [
-    ["home", "🏠", "Home"], ["upcoming", "📅", "Upcoming"], ["cells", "🌐", "Cells"],
-    ["members", "👥", "Members"], ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "My Testimony"],
-    ["resources", "📚", "Resources"], ["kids", "🧒", "EGC Kids"], ["youth", "🔥", "EGC Youth"],
+    ["home", "🏠", "Home"], ["upcoming", "📅", "Upcoming"], ["resources", "📚", "Resources"],
+    ["cells", "🌐", "Cells"], ["groups", "📍", "Groups"], ["prayer", "🙏", "Prayer"], ["testimonies", "✨", "My Testimony"],
+    ["kids", "🧒", "EGC Kids"], ["youth", "🔥", "EGC Youth"],
     ...(auth.canLeadCell() ? [["admin", "🛠️", "Admin"]] : []),
-    ["more", "⚙️", "More"]
+    ["members", "👥", "Members"], ["more", "⚙️", "More"]
   ];
   const unread = notifItems.filter(n => (n.ts || 0) > getNotifSeen()).length;
   $("#root").innerHTML = `
